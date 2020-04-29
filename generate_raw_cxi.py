@@ -29,8 +29,10 @@ if __name__ == '__main__':
 
     dark = []
     raw = []
-
-    for fname in os.listdir(dark_dir_name):
+    lst=os.listdir(dark_dir_name)
+    lst.sort()
+    
+    for fname in lst:
         if not fname.endswith('.tif'): continue
         im = Image.open(os.path.join(dark_dir_name, fname))
         imarray = np.array(im)
@@ -39,7 +41,10 @@ if __name__ == '__main__':
     dark = np.array(dark)
     print("Dark frames readed, with a size of: " + str(dark.shape))
 
-    for fname in os.listdir(raw_dir_name):
+    lst=os.listdir(raw_dir_name)
+    lst.sort()
+    
+    for fname in lst: #os.listdir(raw_dir_name):
         if not fname.endswith('.tif'): continue
         im = Image.open(os.path.join(raw_dir_name, fname))
         imarray = np.array(im)
