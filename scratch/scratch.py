@@ -4,7 +4,7 @@
 E = 1300 #eV
 
 frame_pixels=256 # final pixels 
-img_width= 600 # cropped width of the raw clean frames
+img_width= 1206 # cropped width of the raw clean frames
 
 # fccd readout
 nbcol = 12 # number of colums/block
@@ -22,11 +22,13 @@ t12 = 5 # time ratio between long and short exposure
 
 # shifting/cropping frames
 #nrcols=487
-nrcols=485
+#nrcols=485
+nrcols=484
 
 ngcols=480
 nrows = 520
-gap = 33
+#gap = 33
+gap = 34
 nrows1=nrows-gap # good rows
 
 # pixel size is rescaled
@@ -48,7 +50,9 @@ def clockXblocks1(data):
 def blocksXtif1(data):
     """Translates `ccd` format to `row` format."""
     #return np.concatenate((np.rot90(data[nrows1+gap*2:2*(nrows1)+gap*2,:],2),data[:nrows1,:]),axis=1)
-    return np.concatenate((np.rot90(data[nrows1+1+gap*2:2*(nrows1)+gap*2-1,:],2),data[2:nrows1,:]),axis=1)
+    #return np.concatenate((np.rot90(data[nrows1+1+gap*2:2*(nrows1)+gap*2-1,:],2),data[2:nrows1,:]),axis=1)
+    #return np.concatenate((np.rot90(data[nrows1+1+gap*2:2*(nrows1)+gap*2-1,:],2),data[1:nrows1-1,:]),axis=1)
+    return np.concatenate((np.rot90(data[nrows1+gap*2:2*(nrows1)+gap*2-2,:],2),data[1:nrows1-1,:]),axis=1)
 
 def bblocksXtif1(data): # stack the blocks
     return np.reshape(blocksXtif1(data),(nrcols,nbmux,nbcol))
@@ -72,7 +76,7 @@ def combine(data0, data1, thres=3e3):
 
 ######################3
 # denoise bblocks
-bpts=60
+bpts=60//2
 gg=np.exp(-(np.arange(-bpts//2,bpts//2)/(bpts/4))**2)
 gg/=np.sum(gg)
 #gg=np.reshape(gg,(bpts,1))
@@ -82,23 +86,24 @@ def conv2d(data,filt):
     nr=data.shape[1]
 
     for r in range(nr):
-        data_s[:,r] = np.convolve(yy[:,r], gg, 'same')
+        data_s[:,r] = np.convolve(data[:,r], gg, 'same')
     return data_s
 
 def filter_bblocks(data):
-    #yy=np.reshape(data[:,:,0],(485,192))
-    yy=np.reshape(data[:,:,11],(485,192))
-    bkgthr=5
+    #yy=np.reshape(data[:,:,0],(nrcols,nbmux))
+    # vertical stripes
+    yy=np.reshape(data[:,:,11],(nrcols,192))
+    # clip and smooth
+    bkgthr=5 # background threshold
     yy_s=conv2d(np.clip(yy,-bkgthr,bkgthr),gg)
-    yy_s=np.reshape(yy_s,(485,192,1))
-    #return data-yy_s
-    #yavg = np.average(np.clip(bblocksXtif1(bkg[48,:,:])[0:10,:,:],-bkgthr,bkgthr),axis=0)
+    yy_s=np.reshape(yy_s,(nrcols,nbmux,1))
+
     data_out = data-yy_s
-    data_out = data#-yy_s
+    #data_out = data#-yy_s
     ###yy_avg=np.reshape(np.average(np.clip(bblocksXtif1(data_out)[1:11,:,:],0,2*bkgthr),axis=0),(1,192,12))
     yy_avg=np.reshape(np.average(np.clip(data_out[1:10,:,:],0,2*bkgthr),axis=0),(1,192,12))
     data_out -= yy_avg
-    data_out *= data_out>2
+    data_out *= data_out>7
     return data_out#-yy_s-yy_avg
 
 ######################3
@@ -120,7 +125,7 @@ def center_of_mass(img):
     return np.array([np.sum(img*xx)/np.sum(img0),  np.sum(img0*xx.T)/np.sum(img0)])
 
 
-smooth_factor=3
+smooth_factor=10
 filter_width=frame_pixels//2
 xx1c = np.fft.ifftshift(xx1)
 rr1c = np.sqrt(np.fft.ifftshift(xx1**2+(xx1.T)**2))
@@ -144,7 +149,7 @@ def shift_img(img,shift,flt=sth):
 from scipy import interpolate
 coord=np.arange(-frame_pixels//2,frame_pixels//2)/frame_pixels*img_width+xdim//2
 def rescale(img):
-    return interpolate.interp2d(xx, xx, img, fill_value=0)(coord,coord)
+    return (interpolate.interp2d(xx, xx, img, fill_value=0)(coord,coord)).T
 
 
 
@@ -171,7 +176,7 @@ rdata = fid['entry_1/data_1/raw_data']
 n_frames = rdata.shape[0]//2 # number of frames (double-exposure)
 
 # split short and long exposures
-ii=2500//2+25
+ii=2500//2+25 # middle frame, we could use the first
 rdata0=rdata[ii*2]-bkg_avg0
 rdata1=rdata[ii*2+1]-bkg_avg1
 
@@ -191,6 +196,7 @@ img2 = center_img(img0)
 plt.imshow(img2)
 plt.figure(2)
 img3 = rescale(img2)
+img3 = img3*(img3>0) # positive
 plt.imshow(img3)
 plt.draw()
 
@@ -228,8 +234,8 @@ fido['entry_1/instrument_1/detector_1/y_pixel_size']=x_pixel_size
 
 import sys
 
-Figon = False
-#Figon = True
+#Figon = False
+Figon = True
 
 figure = None
 for ii in np.arange(n_frames):
@@ -238,8 +244,12 @@ for ii in np.arange(n_frames):
     #img0 = combine(imgXraw_nofilter(rdata[ii*2]-bkg_avg0),imgXraw_nofilter(rdata[ii*2+1]-bkg_avg1))
     #img2 = shift_img(img0, com , flt=sth)
     img2 = center_img(img0)
+    img2[ngcols-3:ngcols+2,ngcols-3:ngcols+2]=0
     
     img3 = rescale(img2)
+    # force it to be positive
+    img3 = img3*(img3>0)
+    
     out_data[ii] = img3
     #print('hello')
     sys.stdout.write('\r frame = %s/%s ' %(ii+1,n_frames))
@@ -277,8 +287,8 @@ fido.close()
 
 #yy=np.reshape((bblocksXtif1(rdata1))[:,:,0],(485,192,1))
 
-yy=np.reshape((bblocksXtif1(rdata1))[:,:,0],(485,192))
+yy=np.reshape((bblocksXtif1(rdata1))[:,:,0],(nrcols,192))
 bkgthr=5
 yy_s=conv2d(np.clip(yy,-bkgthr,bkgthr),gg)
-yy_s=np.reshape(yy_s,(485,192,1))
+yy_s=np.reshape(yy_s,(nrcols,192,1))
 bblocksXtif1(rdata1)-yy_s
