@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# plot figures
+Figon = False
+#Figon = True
+
+
 E = 1300 #eV
 
 frame_pixels=256 # final pixels 
@@ -191,14 +196,16 @@ def center_img(img):
 
 
 
-import matplotlib.pyplot as plt
 img2 = center_img(img0)
-plt.imshow(img2)
-plt.figure(2)
 img3 = rescale(img2)
 img3 = img3*(img3>0) # positive
-plt.imshow(img3)
-plt.draw()
+
+if Figon:
+    import matplotlib.pyplot as plt
+    plt.imshow(img2)
+    plt.figure(2)
+    plt.imshow(img3)
+    plt.draw()
 
 
 
@@ -234,8 +241,6 @@ fido['entry_1/instrument_1/detector_1/y_pixel_size']=x_pixel_size
 
 import sys
 
-#Figon = False
-Figon = True
 
 figure = None
 for ii in np.arange(n_frames):
