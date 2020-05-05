@@ -8,3 +8,5 @@
 
 # mpirun -n 4 ptycho.py -i 100 -T 2 -r 2 -M data_set.cxi
 
+#fdir = '/tomodata/NS/200220/'
+python generate_raw_cxi.py /tomodata/NS/200220033/NS_200220033_026.cxi /tomodata/NS/200220033/NS_200220033_025.cxi /data/smarchesini/newlens_20/200220/NS_200220033/200220033/026/ /data/smarchesini/newlens_20/200220/NS_200220033/200220033/026/ 2

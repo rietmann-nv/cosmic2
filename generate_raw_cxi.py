@@ -18,8 +18,8 @@ if __name__ == '__main__':
     #/data/smarchesini/newlens_20/200220/NS_200220033/200220033/002/ This is the folder of the raw frames
 
     cxi_name = args[0] #this contains a pre-processed cxi, we get the metadata from here
-    dark_dir_name = args[1] #this is the directory of raw data, where the exp 1, 2 and dark frames would be readed
-    raw_dir_name = args[2] #this is the directory of raw data, where the exp 1, 2 and dark frames would be readed
+    dark_dir_name = args[1] #this is the directory of raw data, where the exp 1, 2 and dark frames would be read
+    raw_dir_name = args[2] #this is the directory of raw data, where the exp 1, 2 and dark frames would be read
     n_exposures = args[3] #is is either 1 or 2 for single or double exposure
 
     io = ptycommon.IO()
@@ -32,26 +32,38 @@ if __name__ == '__main__':
     lst=os.listdir(dark_dir_name)
     lst.sort()
     
-    for fname in lst:
+    import sys
+    ii=0
+    n_frames=len(lst)
+    
+    for fname in lst:       
+        ii+=1
         if not fname.endswith('.tif'): continue
         im = Image.open(os.path.join(dark_dir_name, fname))
         imarray = np.array(im)
         dark.append(imarray)
+        sys.stdout.write('\r file = %s/%s ' %(ii,n_frames))
+        sys.stdout.flush()
 
     dark = np.array(dark)
-    print("Dark frames readed, with a size of: " + str(dark.shape))
+    print("Dark frames read (skipped non-tif), with a size of: " + str(dark.shape))
 
     lst=os.listdir(raw_dir_name)
     lst.sort()
+    n_frames=len(lst)
+    ii=0
     
     for fname in lst: #os.listdir(raw_dir_name):
+        ii+=1
         if not fname.endswith('.tif'): continue
         im = Image.open(os.path.join(raw_dir_name, fname))
         imarray = np.array(im)
         raw.append(imarray)
+        sys.stdout.write('\r file = %s/%s ' %(ii,n_frames))
+        sys.stdout.flush()
 
     raw = np.array(raw)
-    print("Raw frames readed, with a size of: " + str(raw.shape))
+    print("Raw frames read (skipped non-tif), with a size of: " + str(raw.shape))
 
     data_dictionary = {}
 
