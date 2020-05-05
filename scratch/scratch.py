@@ -137,7 +137,7 @@ xx=np.reshape(np.arange(xdim),(xdim,1))
 xx1=xx-(xx+1>xdim//2)*xdim
 
 def center_of_mass(img):
-    return np.array([np.sum(img*xx)/np.sum(img0),  np.sum(img0*xx.T)/np.sum(img0)])
+    return np.array([np.sum(img*xx)/np.sum(img),  np.sum(img*xx.T)/np.sum(img)])
 
 
 
