@@ -2,26 +2,25 @@
 # -*- coding: utf-8 -*-
 # plot figures
 Figon = False
-#Figon = True
+Figon = True
 
 # pick either final_res or img_width
 final_res = 5e-9 # desired final pixel size nanometers
 #final_res = None # desired final pixel size nanometers
-#img_width= 1024//2 # cropped width of the raw clean frames
-#img_width= 1024 # cropped width of the raw clean frames
 img_width= 1200 # cropped width of the raw clean frames
 
 frame_pixels=256 # final pixels 
 
+# input file
+data_dir='/tomodata/NS/200220033/'
+h5fname=data_dir+'raw_NS_200220033_026.cxi'
 
 E = 1300 #eV
+
 
 import scipy.constants
 
  
-
-
-
 t12 = 5 # time ratio between long and short exposure
 
 # fccd readout
@@ -146,11 +145,7 @@ def center_of_mass(img):
 #from fccdv0 import blocksXtif, blocksXtif1, clockXblocks1
 
 #---------------------------------
-# input file
-data_dir='/tomodata/NS/200220033/'
 
-
-h5fname=data_dir+'raw_NS_200220033_026.cxi'
 import h5py
 
 fid = h5py.File(h5fname, 'r')
@@ -158,16 +153,18 @@ fid = h5py.File(h5fname, 'r')
 
 #########################
 # from metadata
+# Energy (converted to keV)
+# E= fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
 # get the width from the desired resolution
 ccd_dist = fid['entry_1/instrument_1/detector_1/distance'][...]
 hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
-# E= fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
 wavelength = hc/E
+
 if final_res is not None:
     img_width= heigth/(ccd_dist*wavelength/(ccd_pixel*heigth)/final_res) # cropped width of the raw clean frames
 
-smooth_factor=15
-filter_width=frame_pixels/2
+smooth_factor=10
+filter_width=frame_pixels
 #xx1c = np.fft.ifftshift(xx1)
 xx1c = np.fft.ifftshift(xx1)*width/img_width
 
@@ -184,7 +181,6 @@ sth*=sth*(sth>0)
 #sth = np.fft.fftshift(np.exp(-(rr1c/filter_width/2)**2))
 
 sth = sth1
-
 
 ccdw = ngcols*2
 
@@ -410,7 +406,7 @@ for ii in np.arange(n_frames):
     img0 = combine(imgXraw(rdata[ii*2]-bkg_avg0),imgXraw(rdata[ii*2+1]-bkg_avg1))
 
     #img2 = filter_img1(img0)
-    img2 = filter_img0(img0)
+    img2 = filter_img(img0)
     #img2 = img0
     # block out the center pixels
     #bwidth=5

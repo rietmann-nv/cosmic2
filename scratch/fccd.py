@@ -1,313 +1,313 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-# @author: smarchesini
-"""
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-
-"""Code specific to the FCCD detector, including scrambling/descrambling, masking, bad-pixels, etc..."""
 import numpy as np
-import scipy.special as special
-import scipy.signal as signal
-#import matplotlib.pyplot as plt
-#from matplotlib.colors import LogNorm
 
-# output
-frameWidth=256, 
-frameHeight=256,
-
-
-## ALS fccd properties:
-# hnu: single photon counts (ADU):
-E = 1300 #eV
-hnu = E* 1.15e-2 #
+#import scipy.constants
+ 
+# fccd readout
 nbcol = 12 # number of colums/block
 nbpcol=10 # real number of pixels/block
 nb = 16 #number of blocks
 nmux=12 # number of mux
-
-nrows = 970 #number of rows
-pixelsize = 30e-6 # pixel size in meters
-
-#hnu=15, 
-#nbcol=12, 
-#nb=16, 
-#nrows=970, 
-width=1940, 
-height=1152,
-                 
-croppedWidth=960, 
-croppedHeight=960,
-
-rotate=True
-
-
-
-# Derived detector dimensions
 nbmux  = nb * nmux # Nr. of ADC channels
-ncols  = nbcol * nb * nmux # Nr. of columns
-npcols = nbpcol * nb * nmux # Nr. of physical columns
 
-# Initialize rawdata/bgstd with zeros
-rawdata = np.zeros((height * width / nbmux, nbmux))
-bgstd   = np.zeros((height * width / nbmux, nbmux))
+# physical properties
+#hnu = E* 1.15e-2 # single photon in ADU (approx)
+ccd_pixel=30e-6  # 30 microns
 
-# Clock
-tadc   = np.arange(1, nbcol * nrows + 1).astype(np.float).reshape((1, nbcol * nrows))
+# shifting/cropping frames
+nrcols=484
 
-# Index mapping to de-multiplex
-q1 = np.arange(nbmux, dtype=np.int16)
-q2 = ((nbmux - q1 - 1) % nmux) * nb
-q3 = 4 * np.floor(q1 / (nmux * 4))
-q4 = np.floor((nbmux - q1 - 1) / nmux) % 4
-q = ((q2 + nb - q3) - q4).astype(np.int16) - 1
-iq = np.arange(q.shape[0])
-iq[q] = np.arange(q.shape[0])
-gii = (np.arange(npcols/2) + np.floor((np.arange(npcols/2))/nbpcol)*2).astype(np.int)
-aii = (np.arange(ncols/2)  + np.floor((np.arange(ncols/2))/(nbmux*nbcol))*2).astype(np.int)
+ngcols=480
+heigth=ngcols*2
+width = heigth
+
+nrows = 520
+#gap = 33
+gap = 34
+nrows1=nrows-gap # good rows
 
 
-
-# Bad pixel mask
-mskt = (tadc < ((nrows-1) * nbcol+1))&(tadc>((2)*nbcol))
-#mskt[0,7692] = False # This is a hack to remove some artefacts (there might be a better way to do this)
-#mskt[0,7694:7704] = False # This is a hack to remove some artefacts (there might be a better way to do this)
-#mskt[0,7705:7716] = False # This is a hack to remove some artefacts (there might be a better way to do this)
-mskadc = np.ones(nbmux).astype(np.bool)
-#mskadc[82:96] = False
-#mskadc[104]   = False
-#mskadc[191]   = False
-#mskadc[96]    = False
+# coordinates in the clean image
+xx=np.linspace(-1,1,2*ngcols)
 
 
-# Vandermonde filer 
-t1  = tadc - np.min(tadc)
-t1  = t1/np.max(t1) - 0.5
-tt1 = 0.5 - t1
-toffset = 0.6
-tt2 = (tt1 - toffset) * (tt1>toffset) * special.erf((tt1-toffset)*2)
-#vanderX = np.vstack([np.ones_like(t1), tt1, tt1**2, tt2, tt2**2])
-vanderX = np.vstack([np.ones_like(t1), tt1, tt1**2])
-#vanderX = np.vstack([np.ones_like(t1)])
-msktoffset1 = (tadc>(2*nbcol)) & (((tadc-2) % nbcol)>9) #this is corret (mask only every 10th block)
-#msktoffset  = msktoffset1 & (tadc < ((nrows - 100)*nbcol))
-msktoffset  = msktoffset1 & (tadc > (400*nbcol)) & (tadc < ((nrows - 80)*nbcol))
-VS = vanderX[:,msktoffset[0]]
-vanderfilterX = np.dot(vanderX.T, np.linalg.lstsq(np.dot(VS,VS.T), VS)[0])
-#vanderfilterX = np.dot(msktoffset.T, np.linalg.lstsq(np.dot(VS,VS.T), VS)[0])
-vanderfilter = lambda data: np.dot(vanderfilterX, data[msktoffset[0],:])
 
-# Non-physical pixel
-nmskadc = ~mskadc
-nmskadc=np.tile(nmskadc,(12,1)).T.ravel()
-nmskadc_list = np.where(nmskadc)[0]
-a = (msktoffset1 & (tadc > nbcol*nrows*3/4)).T 
-mskbgf = lambda data: msktf( ( (data>-hnu*1) & (data<hnu*1)) | a)
-bgcolf = lambda data: np.sum(rowXclock(data * mskbgf(data)),axis=0) / np.sum(rowXclock(mskbgf(data)),axis=0)
-
-# Fourier matching
-filter  = np.ones(5)
-mskbg2f = lambda data: msktf( (data>-hnu*3) & (data<hnu) )
-powerspec = lambda data: np.sum(np.abs(np.fft.fft(mskbg2f(data)*data)),axis=1)
-mskFclock = lambda pspec: (np.convolve(np.single((pspec-np.mean(pspec)>(pspec[0])/20.) ), filter, 'same') > 0).reshape((pspec.shape[0],1))
-
-# CCD Mask
-filter2 = np.ones((2,2))
-mskccdf = lambda data: (signal.convolve2d(np.single(data > hnu),filter2,'same')>0) * data
-
-# Pixelsize
-pixelsize = pixelsize
-
-# Dimenstions for Cropping 
-Mx, My = (croppedWidth,croppedHeight)
-mx, my = (frameWidth,frameHeight)
-
-# # Semi-transparent beamtop
-# beamstop_radius = beamstop_radius
-# beamstop_transmission = beamstop_transmission
-# beamstop_xshift = beamstop_xshift
-# beamstop_yshift = beamstop_yshift
-
-# # A circular mask for smoothing
-# x = np.arange(mx) - mx/2 + 1
-# y = np.arange(my) - my/2 + 1
-# xx,yy = np.meshgrid(x,y)
-# r2  = (xx**2 + yy**2)
-# msksmooth = (special.erf( ((mx/2)*0.99 - 1.4*np.sqrt(r2)) / 20) + 1) / 2
-
-# # A filter for attenuation/deattenation of beamstop
-# x = np.arange(Mx) - Mx/2 + beamstop_xshift
-# y = np.arange(My*2) - My + beamstop_yshift
-# xx,yy = np.meshgrid(x,y)
-# r2  = (xx**2 + yy**2)
-# filter_beamstop = (r2>(beamstop_radius/pixelsize)**2) + (r2 <= (beamstop_radius/pixelsize)**2)*beamstop_transmission
-
-# Preproc options
-rotate = rotate
-
-
-def msktf(data):
-    """Returns masked data"""
-    return mskadc*(data*mskt.transpose())
-
-def adcmask(bgstd, adcthreshold=50):
-    """Masking wrong adc values."""
-    bgstd[:bgstd.shape[0] / nbmux,:] = bgstd.reshape((bgstd.shape[0] / nbmux, nbmux))
-    adcstd = np.mean(clockXraw(bgstd), axis=0)
-    badadc = adcstd < (np.median(adcstd) + adcthreshold)
-    return badadc
-
-def rowXclock(data):
-    """Translates `clock` format to `row` format."""
-    return np.reshape(np.transpose(np.reshape(data,(nbcol, nrows, nbmux), order='F'), [1,0,2]), (nrows, nbmux*nbcol), order='F')
-
-def ccdXrow(data):
-    """Translates `row` format to `ccd` format."""
-    #return np.vstack([data[5:5+960,ncols/2+gii+1], np.rot90(data[5:5+960,gii+1], 2)])
-    off = 10 
-    return np.vstack([data[:-off,ncols/2+gii+1], np.rot90(data[:-off,gii+1], 2)])
-
-def tifXrow(data):
-    """Translates `row` format to `tif` format."""
-    tif = np.vstack([data[:,ncols/2+aii], np.rot90(data[:,aii], 2)])
-    return tif
-
-def rowXccd(data):
-    """Translates `ccd` format to `row` format."""
-    out = np.zeros((nrows,ncols))
-    off = 10   # This number should be deducted from the input, for example a discrepancey between `width` and `nrows`
-    #out[off/2:-off/2,gii] = np.rot90(data[nrows-off:2*(nrows-off),:],2)
-    out[:-off,gii] = np.rot90(data[nrows-off:2*(nrows-off),:],2)
-    #out[off/2:-off/2,ncols/2 + gii] = data[:nrows-off,:]
-    out[:-off,ncols/2 + gii] = data[:nrows-off,:]
-    return out
-    #return np.hstack([np.rot90(data[nrows:,:],2), data[:nrows,:]])
-
-def clockXrow(data):
+def clockXblocks1(data):
     """Translates `row` format to `clock` format."""
-    return np.reshape(np.transpose(np.reshape(data,(nrows, nbcol, nbmux), order='F'),[1,0,2]), (nrows * nbcol, nbmux), order='F')
+    return np.reshape(np.transpose(np.reshape(data,(nrows1, nbcol, nbmux), order='F'),[1,0,2]), (nrows1 * nbcol, nbmux), order='F')
 
-def rowXtif(data):
-    """Translates `tif` format to `row` format."""
-    return np.reshape(np.roll(np.reshape(rowXccd(data), (nrows, nbcol, nbmux)), -1, axis=2),(nrows, nbcol*nbmux))
+def blocksXtif1(data):
+    """Translates `ccd` format to `row` format."""
+    #return np.concatenate((np.rot90(data[nrows1+gap*2:2*(nrows1)+gap*2,:],2),data[:nrows1,:]),axis=1)
+    #return np.concatenate((np.rot90(data[nrows1+1+gap*2:2*(nrows1)+gap*2-1,:],2),data[2:nrows1,:]),axis=1)
+    #return np.concatenate((np.rot90(data[nrows1+1+gap*2:2*(nrows1)+gap*2-1,:],2),data[1:nrows1-1,:]),axis=1)
+    return np.concatenate((np.rot90(data[nrows1+gap*2:2*(nrows1)+gap*2-2,:],2),data[1:nrows1-1,:]),axis=1)
 
-def clockXtif(data):
-    """Translates `tif` format to `clock` format."""
-    return clockXrow(rowXtif(data))
+def bblocksXtif1(data): # stack the blocks
+    return np.reshape(blocksXtif1(data),(nrcols,nbmux,nbcol))
+    #return np.reshape(blocksXtif1(data),(nbmux,nrcols,nbcol))
 
-def clockXraw(data):
-    """Translates `raw` format to `clock` format. This was the slowest operation in the descrambling process"""
-    #return data.reshape((nbcol * nrows, nb*nmux)).transpose()[q,:].transpose()
-    #return data.reshape((nbcol * nrows, nb*nmux))
-    #return data.reshape((nbcol * nrows, nb*nmux), order='F')[:,q]
-    return data.reshape((nbcol * nrows, nb*nmux))[:,q]
-    
-def rawXclock(data):
-    """Translates `clock` format to `raw` format."""
-    return data.reshape((nbcol * nrows, nb*nmux), order='F')[:,iq]
 
-def cropimg(img ,s, dx=0, dy=0):
-    """Returns cropped image."""
-    c0 = np.floor((img.shape[0] - s[0])/2 + dx)
-    c1 = np.floor((img.shape[1] - s[1])/2 + dy)
-    return img[c0:c0+s[0],c1:c1+s[1]]
+def tif1Xbblocks(data): # tif from stacked blocks 
+    return np.reshape(data[:,:,1:nbcol-1],(nrcols,nbmux*nbpcol))
 
-def cropF(self,img):
-    """Returns image cropped to (croppedWidth, croppedHeight)."""
-    return cropimg(img,(My, Mx))
+def imgXtif1(data): # final image from tif1
+    #return np.concatenate((data[6:486,0:960],np.rot90(data[6:486,960:],2)))
+    #return np.concatenate((data[5:485,0:960],np.rot90(data[5:485,960:],2)))
+    return np.concatenate((data[4:484,0:960],np.rot90(data[4:484,960:],2)))
 
-def cropframe(self,img):
-    """Returns image cropped to (frameWidth, frameHeight)."""
-    return cropimg(img,(my, mx), dx=beamstop_xshift, dy=beamstop_yshift)
 
-def cropframe_smooth(self,img):
-    """Returns image smoothed and cropped to (frameWidth, frameHeight)."""
-    return cropframe(img)*msksmooth
-
-def downsample(frame):
-    """Returns downsampled frame."""
-    return np.abs(np.fft.fft2(cropframe_smooth(np.fft.fftshift(np.fft.ifft2(frame)))))
-
-def lowpass(frame):
-    """Returns filtered frame."""
-    return downsample(cropF(frame))
-
-def deattenuate(frame):
-    """Returns frame with deattenuated beamstop area."""
-    return frame / filter_beamstop
-
-def attenuate(frame):
-    """Returns frame with attenuated beamstop area."""
-    return frame * filter_beamstop
-
-def tif2raw(img):
-    """Returns scrambled data, translating `tif` format to `raw` format."""
-    clockdata = clockXtif(img)
-    return rawXclock(clockdata)
-
-def descramble(rawdata, badadc_mask=None, mask=False):
-    """Returns descrambled data, translating `raw` format to `clock` format."""
-    rawdata[:rawdata.shape[0] / nbmux,:] = rawdata.reshape((rawdata.shape[0] / nbmux, nbmux))
-    if mask:
-        clockdata = msktf(clockXraw(rawdata.reshape((height, width))))
-    else:
-        clockdata = clockXraw(rawdata.reshape((height, width)))
-    if badadc_mask is not None:
-        clockdata = clockdata*badadc_mask
-    return clockdata
-
-def scramble(data):
-    """Returns scrambled data, translating `ccd` format ro `raw` format."""
-    clockdata = clockXrow(rowXccd(data))
-    return rawXclock(clockdata)
-
-def preprocessing(data):
-    """Returns clean data after removing of negative pixels, filtering (vandermonde), removing
-    of non-physical pixels and more filtering (fourier)."""
-
-    # 1. Removing negative pixels
-    data[data < (-hnu*5)] = 0.
-
-    # 2. Remove polynomials (vandermonde filter)
-    data = data - vanderfilter(data)
-    
-    # 3. Remove non-physical pixels
-    bgcol = bgcolf(data)
-    bgcol[nmskadc_list] = 0
-    bgcol = clockXrow(np.vstack([np.zeros((2,ncols)),np.tile(bgcol,(nrows-37,1)),np.zeros((35,ncols))]))
-    data = msktf(data - bgcol)
-    
-    # 4. Fourier filter
-    bgfilt = np.zeros_like(data)
-    for jj in range(2):
-        bgfilt = mskbgf(data) * data + (~mskbgf(data)) * bgfilt
-        bgfilt = np.real(np.fft.ifft(np.fft.fft(bgfilt) * mskFclock(powerspec(data))))
-    data = data - bgfilt
-
-    # 5. Downsample and low pass filter
-    data = lowpass(deattenuate(assemble(data)))
-
-    # 6. Rotate the image by 90 degress counter clockwise
-    if rotate:
-        data = np.rot90(data, -1)
-    
-    return data
         
-def assemble(clockdata):
-    """Returns assembled data, translating 'clock' format to 'ccd' format."""
-    return mskccdf(ccdXrow(rowXclock(clockdata)))
+# combine double exposure
+def combine(data0, data1, t12, thres=3e3):
+    msk=data0<thres
+    return (t12+1)*(data0*msk+data1)/(t12*msk+1)
 
-def assemble_nomask(clockdata):
-    """Returns assembled data, translating 'clock' format to 'ccd' format."""
-    return ccdXrow(rowXclock(clockdata))
+######################3
+# denoise bblocks
+bpts=60//2
+gg=np.exp(-(np.arange(-bpts//2,bpts//2)/(bpts/4))**2)
+gg/=np.sum(gg)
+#gg=np.reshape(gg,(bpts,1))
 
-def assemble2(clockdata):
-    """Returns assembled data, translating 'clock' format to 'ccd' format."""
-    return tifXrow(rowXclock(clockdata))
+def conv2d(data,filt):
+    data_s=np.empty(np.shape(data))
+    nr=data.shape[1]
+
+    for r in range(nr):
+        data_s[:,r] = np.convolve(data[:,r], gg, 'same')
+    return data_s
+
+def filter_bblocks(data):
+    #yy=np.reshape(data[:,:,0],(nrcols,nbmux))
+    # vertical stripes
+    yy=np.reshape(data[:,:,11],(nrcols,192))
+    # clip and smooth
+    bkgthr=5 # background threshold
+    yy_s=conv2d(np.clip(yy,-bkgthr,bkgthr),gg)
+    yy_s=np.reshape(yy_s,(nrcols,nbmux,1))
+
+    data_out = data-yy_s
+    #data_out = data#-yy_s
+    ###yy_avg=np.reshape(np.average(np.clip(bblocksXtif1(data_out)[1:11,:,:],0,2*bkgthr),axis=0),(1,192,12))
+    yy_avg=np.reshape(np.average(np.clip(data_out[1:10,:,:],0,2*bkgthr),axis=0),(1,192,12))
+    data_out -= yy_avg
+    data_out *= data_out>7
+    return data_out#-yy_s-yy_avg
+
+######################3
+
+def imgXraw_nofilter(data): # combine operations
+    return imgXtif1(tif1Xbblocks(bblocksXtif1(data)))
+  #  return imgXtif1(tif1Xbblocks(filter_bblocks(bblocksXtif1(data))))
+
+
+def imgXraw(data): # combine operations
+    #return imgXraw_nofilter(data)
+    return imgXtif1(tif1Xbblocks(filter_bblocks(bblocksXtif1(data))))
+
+
+
+'''
+
+#########################
+# from metadata
+# Energy (converted to keV)
+# E= fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
+# get the width from the desired resolution
+
+#if final_res is not None:
+#    img_width= heigth/(ccd_dist*wavelength/(ccd_pixel*heigth)/final_res) # cropped width of the raw clean frames
+
+smooth_factor=10
+filter_width=frame_pixels
+#xx1c = np.fft.ifftshift(xx1)
+xx1c = np.fft.ifftshift(xx1)*width/img_width
+
+sth1= -np.fft.fftshift(np.arctan((np.abs(xx1c)-filter_width)/smooth_factor))/np.pi*2
+sth1*=sth1>0
+sth1*=sth1
+sth1 = sth1*sth1.T
+
+rr1c = np.sqrt(np.fft.ifftshift(xx1**2+(xx1.T)**2))*width/img_width
+
+sth=-np.fft.fftshift(np.arctan((rr1c-filter_width)/smooth_factor))/np.pi*2
+sth*=sth*(sth>0)
+
+#sth = np.fft.fftshift(np.exp(-(rr1c/filter_width/2)**2))
+
+sth = sth1
+
+ccdw = ngcols*2
+
+"""
+def shift_img0(img,shift,flt=sth):
+    #img_max=np.max(img)
+    #soft_filt=np.arctan((img-img_max*.1)/(img_max*.1))*2/np.pi+1
+
+    Fimg=np.fft.fft2(img)
+    #Fimg=np.fft.fft2(img*(1-soft_filt))
+    Fimg*=np.exp(1j*2*np.pi*shift[0]*xx1/xdim)
+    Fimg*=np.exp(1j*2*np.pi*shift[1]*xx1.T/xdim)#*flt.T
+    Fimg=np.real(np.fft.ifft2(Fimg))
+
+    #Fimg1=np.fft.fft2(img*soft_filt)
+    #Fimg1*=np.exp(1j*2*np.pi*shift[0]*xx1/xdim)*flt
+    #Fimg1*=np.exp(1j*2*np.pi*shift[1]*xx1.T/xdim)#*flt.T
+    #Fimg1=np.real(np.fft.ifft2(Fimg1))
+    #Fimg+=Fimg1
+    
+
+    
+    #set to 0 the wrap-around indices
+    Fimg[:, np.int(np.min([ccdw,np.floor(ccdw-shift[0])])):ccdw]=0
+    Fimg[np.int(np.min([ccdw,np.floor(ccdw-shift[1])])):ccdw,:]=0
+    Fimg[np.int(np.max([0,-shift[0]])):np.max([0,-np.int(np.ceil(shift[0]))]),:]=0
+    Fimg[:,np.int(np.max([0,-shift[1]])):np.max([0,-np.int(np.ceil(shift[1]))])]=0
+    
+    return Fimg
+
+def shift_img(img,shift,flt=sth):
+    img_max=np.max(img)
+    #soft_filt=np.arctan((img-img_max*.1)/(img_max*.1))*2/np.pi+1
+    soft_filt=np.arctan((img-img_max*.1)/(img_max*1e-2))/np.pi+.5
+    
+    #Fimg=np.fft.fft2(img)
+    Fimg=np.fft.fft2(img*(1-soft_filt))
+    Fimg*=np.exp(1j*2*np.pi*shift[0]*xx1/xdim)*flt
+    Fimg*=np.exp(1j*2*np.pi*shift[1]*xx1.T/xdim)#*flt.T
+    Fimg=np.real(np.fft.ifft2(Fimg))
+
+    Fimg1=np.fft.fft2(img*soft_filt)
+    Fimg1*=np.exp(1j*2*np.pi*shift[0]*xx1/xdim)
+    Fimg1*=np.exp(1j*2*np.pi*shift[1]*xx1.T/xdim)#*flt.T
+    Fimg1=np.real(np.fft.ifft2(Fimg1))
+    
+    Fimg+=Fimg1
+    
+
+    
+    #set to 0 the wrap-around indices
+    Fimg[:, np.int(np.min([ccdw,np.floor(ccdw-shift[0])])):ccdw]=0
+    Fimg[np.int(np.min([ccdw,np.floor(ccdw-shift[1])])):ccdw,:]=0
+    Fimg[np.int(np.max([0,-shift[0]])):np.max([0,-np.int(np.ceil(shift[0]))]),:]=0
+    Fimg[:,np.int(np.max([0,-shift[1]])):np.max([0,-np.int(np.ceil(shift[1]))])]=0
+    
+    return Fimg
+"""
+
+def filter_img(img,flt=sth):
+    #img_max=np.max(img)
+    #soft_filt=np.arctan((img-img_max*.1)/(img_max*.1))*2/np.pi+1
+
+    Fimg=np.fft.fft2(img)
+    #Fimg=np.fft.fft2(img*(1-soft_filt))
+    Fimg*=flt
+    #Fimg*=np.exp(1j*2*np.pi*shift[1]*xx1.T/xdim)#*flt.T
+    Fimg=np.abs(np.fft.ifft2(Fimg))
+    Fimg*=Fimg>0
+    
+    return Fimg
+
+import scipy.signal
+box_width=np.max([np.int(np.floor(img_width/frame_pixels)),1])
+
+bbox=np.ones((box_width,box_width))
+
+def filter_img0(img):
+    return scipy.signal.convolve2d(img,bbox,mode='same',boundary='fill')
     
     
+def filter_img1(img,flt=sth):
+    img_max=np.max(img)
+    #soft_filt=np.arctan((img-img_max*.1)/(img_max*1e-2))/np.pi+.5
+    soft_filt=np.arctan((img-img_max*.005)/(img_max*1e-3))/np.pi+.5
+    
+    #Fimg=np.fft.fft2(img)
+    Fimg=np.fft.fft2(img*(1-soft_filt))
+    Fimg*=flt
+    #Fimg*=np.exp(1j*2*np.pi*shift[1]*xx1.T/xdim)#*flt.T
+    Fimg=np.abs(np.fft.ifft2(Fimg))
+    
+    Fimg+=img*soft_filt
+
+    
+    return Fimg
 
 
+from scipy import interpolate
+coord=np.arange(-frame_pixels//2,frame_pixels//2)/frame_pixels*img_width+xdim//2
+def rescale(img):
+    return (interpolate.interp2d(xx, xx, img, fill_value=0)(coord,coord)).T
+
+ 
+
+# characterization of the dark field 
+# get the background
+bkg=np.array(fid['entry_1/data_1/dark_data'])
+
+# split the average from 2 exposures:
+bkg_avg0=np.average(bkg[0::2],axis=0)
+bkg_avg1=np.average(bkg[1::2],axis=0)
+
+## get one frame to compute center
+rdata = fid['entry_1/data_1/raw_data']
+n_frames = rdata.shape[0]//2 # number of frames (1/2 for double exposure)
+
+# split short and long exposures
+ii=2500//2+25 # middle frame, we could use the first
+rdata0=rdata[ii*2]-bkg_avg0
+rdata1=rdata[ii*2+1]-bkg_avg1
+
+img0=combine(imgXraw(rdata0),imgXraw(rdata1))
+
+# we need a shift, we take it from the first frame:
+#com = np.round(center_of_mass(img0*(img0>0))-xdim//2)
+com = center_of_mass(img0*(img0>0))-xdim//2
+com = np.round(com)
+
+def shift_rescale(img):
+    return (interpolate.interp2d(xx, xx, img, fill_value=0)(coord+com[1],coord+com[0])).T
+
+
+# incorporate the shift
+#def center_img(img):
+#    return shift_img(img0, com)
+
+
+# plot an image
+
+if Figon:
+    img2 = filter_img(img0)
+    #img3 = rescale(img2)
+    img3 = shift_rescale(img2)
+    img3 = img3*(img3>0) # positive
+
+
+
+# modify pixel size
+# pixel size is rescaled
+x_pixel_size=ccd_pixel*img_width/frame_pixels
+#####################
+
+
+
+
+figure = None
+for ii in np.arange(n_frames):
+
+    img0 = combine(imgXraw(rdata[ii*2]-bkg_avg0),imgXraw(rdata[ii*2+1]-bkg_avg1))
+
+    #img2 = filter_img1(img0)
+    img2 = filter_img(img0)
+    #img2 = img0
+    # block out the center pixels
+    #bwidth=5
+    #img2[ngcols-bwidth:ngcols+bwidth+1,ngcols-bwidth:ngcols+bwidth+1]=0
+    
+    #img3 = rescale(img2)
+    img3 = shift_rescale(img2)
+    # force it to be positive
+    img3 = img3*(img3>0)
+'''
