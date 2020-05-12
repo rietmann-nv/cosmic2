@@ -24,7 +24,8 @@ import scipy.constants
 
 
 import fccd
-from fccd import imgXraw as imgXraw
+from fccd import imgXraw as cleanXraw
+
 
 # combine double exposure
 def combine(data0, data1, thres=3e3):
@@ -50,42 +51,46 @@ rdata = fid['entry_1/data_1/raw_data']
 n_frames = rdata.shape[0]//2 # number of frames (1/2 for double exposure)
 
 # split short and long exposures
-ii=2500//2+25 # middle frame, we could use the first
+# # middle frame, we could use the first
+ii = np.int(n_frames+np.sqrt(n_frames))//2
+
 rdata0=rdata[ii*2]-bkg_avg0
 rdata1=rdata[ii*2+1]-bkg_avg1
 
-# from metadata
-# Energy (converted to keV)
-# E= fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
-E = 1300 #eV
 
 
 
 # get one clean frame
-img0=combine(imgXraw(rdata0),imgXraw(rdata1))
+img0=combine(cleanXraw(rdata0),cleanXraw(rdata1))
 
 width=img0.shape[0]
 
 # get the width from the desired resolution
 if final_res is not None:
+    # from metadata
+    # Energy (converted to keV)
+    # E= fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
+    E = 1300 #eV
+
     ccd_pixel=fccd.ccd_pixel
     ccd_dist = fid['entry_1/instrument_1/detector_1/distance'][...]
     hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
     wavelength = hc/E
 
-    img_width= width/(ccd_dist*wavelength/(ccd_pixel*width)/final_res) # cropped width of the raw clean frames
-    #img_width = resolution2frame_width(ccd_dist,E,ccd_pixel,heigth,final_res)
-
+    #img_width= width/(ccd_dist*wavelength/(ccd_pixel*width)/final_res) # cropped width of the raw clean frames
+    img_width = width**2*ccd_pixel*final_res/(ccd_dist*wavelength)
+    
 
 import filter_frames
 center_of_mass, filter_img, shift_rescale = filter_frames.init(width, frame_pixels, img_width)
+
 
 # we need a shift, we take it from the first frame:
 com = center_of_mass(img0*(img0>0))-width//2
 com = np.round(com)
 
 def frameXclean(img):
-    return shift_rescale(img,com)
+    return shift_rescale(filter_img(img),com)
 
 
 # plot an image
@@ -93,7 +98,7 @@ def frameXclean(img):
 if Figon:
     img2 = filter_img(img0)
     #img3 = rescale(img2)
-    img3 = frameXclean(img2)
+    img3 = frameXclean(img0)
     #img3 = img3*(img3>0) # positive
 
     import matplotlib.pyplot as plt
@@ -145,10 +150,9 @@ try:
 except: None
     
     
-
-
 # modify pixel size. pixel size is rescaled
 x_pixel_size=ccd_pixel*img_width/frame_pixels
+
 #####################
 try:
     del fido['entry_1/instrument_1/detector_1/x_pixel_size']
@@ -169,8 +173,8 @@ import sys
 figure = None
 for ii in np.arange(n_frames):
 
-    img0 = combine(imgXraw(rdata[ii*2]-bkg_avg0),imgXraw(rdata[ii*2+1]-bkg_avg1))
-    img2 = filter_img(img0)
+    img0 = combine(cleanXraw(rdata[ii*2]-bkg_avg0),cleanXraw(rdata[ii*2+1]-bkg_avg1))
+    #img2 = filter_img(img0)
     img3 = frameXclean(img0)
     
     out_data[ii] = img3
