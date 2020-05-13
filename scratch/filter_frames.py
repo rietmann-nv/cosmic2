@@ -38,7 +38,22 @@ def init(width, frame_pixels, img_width):
     return center_of_mass, filter_img0, shift_rescale
     #ccdw = ngcols*2
 
+import scipy.constants
+hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
+
+#
+# get the width from the desired resolution
+# width=img0.shape[0]
+
+def resolution2frame_width(ccd_dist,E,ccd_pixel,width,final_res):
+    wavelength = hc/E
+    padded_frame_width = width**2*ccd_pixel*final_res/(ccd_dist*wavelength)
+
+    return padded_frame_width # cropped width of the raw clean frames
+
+
 """
+nothing here
 
 smooth_factor=10
 filter_width=frame_pixels
@@ -189,16 +204,5 @@ com = np.round(com)
 #img3 = rescale(img2)
 #img3 = shift_rescale(img2)
 #img3 = img3*(img3>0) # positive
-import scipy.constants
-hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
 
-#
-# get the width from the desired resolution
-def resolution2frame_width(ccd_dist,E,ccd_pixel,heigth,final_res):
-    wavelength = hc/E
-    return heigth/(ccd_dist*wavelength/(ccd_pixel*heigth)/final_res) # cropped width of the raw clean frames
-
-#ccd_dist = fid['entry_1/instrument_1/detector_1/distance'][...]
-
-#if final_res is not None:
 
