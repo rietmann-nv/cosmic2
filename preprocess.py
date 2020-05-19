@@ -103,32 +103,32 @@ if __name__ == '__main__':
 
     if metadata["double_exposure"]:
 
-        metadata["double_exp_time_ratio"] = metadata["dwell1"] / metadata["dwell2"] # time ratio between long and short exposure
+        metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
 
-        center_frames = np.array([raw_frames[ii*2], raw_frames[ii*2 + 1]])
+        center_frames = np.array([raw_frames[center*2], raw_frames[center*2 + 1]])
 
     else:
 
-        center_frames = raw_frames[ii*2]
+        center_frames = raw_frames[center*2]
 
 
     metadata["detector_pixel_size"] = 30e-6  # 30 microns
-    metadata["detector_distance"] = 0.0121 #this is in meters
+    metadata["detector_distance"] = 0.121 #this is in meters
 
-    my_indexes = np.array(calculateDecomposition(metadata["translations"].shape[0], rank, size))
+    #my_indexes = np.array(calculateDecomposition(metadata["translations"].shape[0], rank, size))
 
 
     print(metadata)
     print(dark_frames)
     print(raw_frames)
 
-    metadata, background_avg =  stefano_filter.prepare(metadata, center_frames, dark_frames):
-    output_data = stefano_filter.process_stack(metadata, raw_frames, background_avg):
+    metadata, background_avg =  stefano_filter.prepare(metadata, center_frames, dark_frames)
+    output_data = stefano_filter.process_stack(metadata, raw_frames, background_avg)
 
     #output_data = preprocess(metadata, dark_frames, raw_frames, options, options["gpu_accelerated"])
 
     data_dictionary = {}
-    data_dictionary.update({"data" : output_data["preproc_data"]})
+    data_dictionary.update({"data" : output_data})
 
     output_filename = os.path.splitext(json_file)[:-1][0] + "_preproc.cxi"
 

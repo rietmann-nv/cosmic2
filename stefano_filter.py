@@ -1,7 +1,10 @@
 import sys
 import numpy as np
 import scipy
-from fccd import imgXraw as cleanXraw
+import scipy.constants
+import scipy.interpolate
+import scipy.signal
+from scratch.fccd import imgXraw as cleanXraw
 
 
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
@@ -15,7 +18,7 @@ def resolution2frame_width(final_res, detector_distance, energy, detector_pixel_
     hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
    
     wavelength = hc/energy
-    padded_frame_width = width**2*detector_pixel_size*final_res/(detector_distance*wavelength)
+    padded_frame_width = frame_width**2*detector_pixel_size*final_res/(detector_distance*wavelength)
 
     return padded_frame_width # cropped (TODO:or padded?) width of the raw clean frames
 
@@ -30,7 +33,7 @@ def filter_frame(frame, bbox):
 
 
 #TODO: WHAT IS THIS (center frames?)
-def shift_rescale(img, coord, center_of_mass):
+def shift_rescale(img, xx, coord, center_of_mass):
     img_out=(scipy.interpolate.interp2d(xx, xx, img, fill_value=0)(coord+center_of_mass[1],coord+center_of_mass[0])).T
     img_out*=(img_out>0)
     return img_out
@@ -52,8 +55,14 @@ def prepare(metadata, frames, dark_frames):
 
         background_avg = split_background(dark_frames)
 
-        frame_exp1 = frames[0::2] - background_avg[0]
-        frame_exp2 = frames[1::2] - background_avg[1]
+        frame_exp1 = (frames[0::2] - background_avg[0])[0]
+        frame_exp2 = (frames[1::2] - background_avg[1])[0]
+
+        print("test")
+        print(frames)
+        print(frame_exp1)
+        print(frame_exp2)
+        print(metadata["double_exp_time_ratio"])
 
         # get one clean frame
         clean_frame = combine_double_exposure(cleanXraw(frame_exp1), cleanXraw(frame_exp2), metadata["double_exp_time_ratio"])
@@ -70,10 +79,10 @@ def prepare(metadata, frames, dark_frames):
     xx=np.reshape(np.arange(metadata["frame_width"]),(metadata["frame_width"],1))
 
     # we need a shift, we take it from the first frame:
-    center_of_mass = center_of_mass(clean_frame*(clean_frame>0), xx) - metadata["frame_width"]//2
-    center_of_mass = np.round(com)
+    com = center_of_mass(clean_frame*(clean_frame>0), xx) - metadata["frame_width"]//2
+    com = np.round(com)
 
-    metadata["center_of_mass"] = center_of_mass
+    metadata["center_of_mass"] = com
 
     # cropped width of the raw clean frames
 
@@ -84,7 +93,7 @@ def prepare(metadata, frames, dark_frames):
         metadata["padded_frame_width"] = resolution2frame_width(metadata["final_res"], metadata["detector_distance"], metadata["energy"], metadata["detector_pixel_size"], metadata["frame_width"]) 
         
     # modify pixel size; the pixel size is rescaled
-    metadata["x_pixel_size"] = detector_pixel_size * metadata["padded_frame_width"] / metadata["output_frame_width"]
+    metadata["x_pixel_size"] = metadata["detector_pixel_size"] * metadata["padded_frame_width"] / metadata["output_frame_width"]
     metadata["y_pixel_size"] = metadata["x_pixel_size"]
 
     return metadata, background_avg
@@ -99,8 +108,15 @@ def process_stack(metadata, frames_stack, background_avg):
         n_frames = frames_stack.shape[0]
 
     #TODO: WHAT IS THIS
+    xx=np.reshape(np.arange(metadata["frame_width"]),(metadata["frame_width"],1))
+
+    #TODO: WHAT IS THIS
     box_width = np.max([np.int(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1])
     bbox = np.ones((box_width,box_width))
+
+    print(metadata["padded_frame_width"])
+    print(metadata["output_frame_width"])
+    print(bbox.shape)
 
     #TODO: WHAT IS THIS, use parentesis or break it down into multiple lines...
     coord = np.arange(-metadata["output_frame_width"]//2, metadata["output_frame_width"]//2) / metadata["output_frame_width"] * metadata["padded_frame_width"] + metadata["frame_width"]//2
@@ -109,7 +125,7 @@ def process_stack(metadata, frames_stack, background_avg):
 
     out_data = np.zeros(out_data_shape, dtype= np.float32)
 
-    for ii in np.arange(n_frames):
+    for ii in np.arange(5):
 
         if metadata["double_exposure"]:
             clean_frame = combine_double_exposure(cleanXraw(frames_stack[ii*2]-background_avg[0]), cleanXraw(frames_stack[ii*2+1]-background_avg[1]), metadata["double_exp_time_ratio"])
@@ -120,12 +136,16 @@ def process_stack(metadata, frames_stack, background_avg):
         filtered_frame = filter_frame(clean_frame, bbox)
 
         #Center and downsample a clean frame
-        centered_rescaled_frame = shift_rescale(filtered_frame, coord, metadata["center_of_mass"])
-    
+        centered_rescaled_frame = shift_rescale(filtered_frame, xx, coord, metadata["center_of_mass"])
+
+        print(clean_frame.shape)    
+
         out_data[ii] = centered_rescaled_frame
         #print('hello')
         sys.stdout.write('\r frame = %s/%s ' %(ii+1, n_frames))
         sys.stdout.flush()
+
+    print("\n")
 
     return out_data
 

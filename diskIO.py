@@ -87,7 +87,8 @@ def read_tiffs(directory):
         frames.append(imarray)
         sys.stdout.write('\r file = %s/%s ' %(ii,n_frames))
         sys.stdout.flush()
-
+        
+    print("\n")
     return np.array(frames)
 
 
