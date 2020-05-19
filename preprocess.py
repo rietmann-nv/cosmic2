@@ -8,8 +8,10 @@ from xcale.common.communicator import mpi_allGather, rank, size
 import sys
 import os
 from PIL import Image
+import diskIO
 
 import baseline_filter
+import stefano_filter
 
 def calculateDecomposition(n_frames, my_rank, n_ranks):
 
@@ -29,10 +31,10 @@ def calculateDecomposition(n_frames, my_rank, n_ranks):
     return frames_range
 
 
-def preprocess(raw_data, dark_data, metadata, options, gpu_accelerated):
+def preprocess(metadata, dark_frames, raw_frames, options, gpu_accelerated):
 
-    input_data = {"raw_data": raw_data, 
-                  "dark_data": dark_data}
+    input_data = {"raw_data": raw_frames, 
+                  "dark_data": dark_frames}
 
     if gpu_accelerated:
 
@@ -83,28 +85,57 @@ if __name__ == '__main__':
         options["gpu_accelerated"] = False
 
 
-    cxi_name = args[0]
+    json_file = args[0]
 
-    io = ptycommon.IO()
-    metadata = io.read(cxi_name, io.metadataFormat) #This guy has all information needed
+    
+    metadata, dark_frames, raw_frames = diskIO.read(json_file)
 
-    n_exposures = metadata["n_exposures"]
+    metadata["final_res"] = 5e-9 # desired final pixel size nanometers
+
+    metadata["desired_padded_input_frame_width"] = None
+
+    metadata["output_frame_width"] = 256 # final frame width 
+
+    n_frames = metadata["translations"].shape[0]
+
+    # ii is the middle frame, we could use the first or average a few TODO: why + sqrt()? that is not the middle, is it
+    center = np.int(n_frames + np.sqrt(n_frames))//2
+
+    if metadata["double_exposure"]:
+
+        metadata["double_exp_time_ratio"] = metadata["dwell1"] / metadata["dwell2"] # time ratio between long and short exposure
+
+        center_frames = np.array([raw_frames[ii*2], raw_frames[ii*2 + 1]])
+
+    else:
+
+        center_frames = raw_frames[ii*2]
+
+
+    metadata["detector_pixel_size"] = 30e-6  # 30 microns
+    metadata["detector_distance"] = 0.0121 #this is in meters
 
     my_indexes = np.array(calculateDecomposition(metadata["translations"].shape[0], rank, size))
 
-    data = {}
 
-    data = {**data, **io.read(cxi_name, {"raw_data": ptycommon.IO().dataFormat["raw_data"]}, my_indexes)}
-    data = {**data, **io.read(cxi_name, {"dark_data": ptycommon.IO().dataFormat["dark_data"]})} #Each rank reads all darks for now
+    print(metadata)
+    print(dark_frames)
+    print(raw_frames)
 
-    output_data = preprocess(data["raw_data"], data["dark_data"], metadata, options, options["gpu_accelerated"])
+    metadata, background_avg =  stefano_filter.prepare(metadata, center_frames, dark_frames):
+    output_data = stefano_filter.process_stack(metadata, raw_frames, background_avg):
+
+    #output_data = preprocess(metadata, dark_frames, raw_frames, options, options["gpu_accelerated"])
 
     data_dictionary = {}
     data_dictionary.update({"data" : output_data["preproc_data"]})
 
-    output_filename = "preproc_" + os.path.basename(cxi_name)
+    output_filename = os.path.splitext(json_file)[:-1][0] + "_preproc.cxi"
 
     print("Saving cxi file: " + output_filename)
+
+    io = ptycommon.IO()
+
 
     if rank is 0: #there is still no merge of the data, this guy only would write his partial results
 
