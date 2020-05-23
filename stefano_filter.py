@@ -22,9 +22,9 @@ def resolution2frame_width(final_res, detector_distance, energy, detector_pixel_
 
     return padded_frame_width # cropped (TODO:or padded?) width of the raw clean frames
 
-#TODO: WHAT IS THIS
-def center_of_mass(img, xx):
-    return np.array([np.sum(img*xx)/np.sum(img), np.sum(img*xx.T)/np.sum(img)])
+#Computes a weighted average of the coordinates, where if the image is stronger you have more weight.
+def center_of_mass(img, coord_array_1d):
+    return np.array([np.sum(img*coord_array_1d)/np.sum(img), np.sum(img*coord_array_1d.T)/np.sum(img)])
 
 
 #TODO: WHAT IS THIS
@@ -32,9 +32,9 @@ def filter_frame(frame, bbox):
     return scipy.signal.convolve2d(frame, bbox, mode='same', boundary='fill')
 
 
-#TODO: WHAT IS THIS (center frames?)
-def shift_rescale(img, xx, coord, center_of_mass):
-    img_out=(scipy.interpolate.interp2d(xx, xx, img, fill_value=0)(coord+center_of_mass[1],coord+center_of_mass[0])).T
+#Interpolation around the center of mass, thus centering. This downsamples into the output frame width
+def shift_rescale(img, coord_array_1d, coord, center_of_mass):
+    img_out=(scipy.interpolate.interp2d(coord_array_1d, coord_array_1d, img, fill_value=0)(coord+center_of_mass[1],coord+center_of_mass[0])).T
     img_out*=(img_out>0)
     return img_out
 
@@ -75,7 +75,7 @@ def prepare(metadata, frames, dark_frames):
     #TODO: When do we know this one? Is the one original shape from the beginning right?
     metadata["frame_width"] = clean_frame.shape[0]
 
-    #TODO: WHAT IS THIS
+    #Coordinates from 0 to frame width, 1 dimension
     xx=np.reshape(np.arange(metadata["frame_width"]),(metadata["frame_width"],1))
 
     # we need a shift, we take it from the first frame:
@@ -107,25 +107,25 @@ def process_stack(metadata, frames_stack, background_avg):
     else:
         n_frames = frames_stack.shape[0]
 
-    #TODO: WHAT IS THIS
+    #Coordinates from 0 to frame width, 1 dimension
     xx=np.reshape(np.arange(metadata["frame_width"]),(metadata["frame_width"],1))
 
-    #TODO: WHAT IS THIS
-    box_width = np.max([np.int(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1])
-    bbox = np.ones((box_width,box_width))
+    #Convolution kernel
+    kernel_width = np.max([np.int(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1])
+    bbox = np.ones((kernel_width,kernel_width))
 
     print(metadata["padded_frame_width"])
     print(metadata["output_frame_width"])
     print(bbox.shape)
 
-    #TODO: WHAT IS THIS, use parentesis or break it down into multiple lines...
+    #Coordinates of the output frame onto the grid of the input frame
     coord = np.arange(-metadata["output_frame_width"]//2, metadata["output_frame_width"]//2) / metadata["output_frame_width"] * metadata["padded_frame_width"] + metadata["frame_width"]//2
 
     out_data_shape = (n_frames, metadata["output_frame_width"], metadata["output_frame_width"])
 
     out_data = np.zeros(out_data_shape, dtype= np.float32)
 
-    for ii in np.arange(5):
+    for ii in np.arange(n_frames):
 
         if metadata["double_exposure"]:
             clean_frame = combine_double_exposure(cleanXraw(frames_stack[ii*2]-background_avg[0]), cleanXraw(frames_stack[ii*2+1]-background_avg[1]), metadata["double_exp_time_ratio"])

@@ -13,7 +13,7 @@ output_frame_pixels=256 # final pixels
 t12 = 10 # time ratio between long and short exposure
 
 # input file
-data_dir='/tomodata/NS/200220033/'
+data_dir='/home/pablo/repos/cosmic2/'
 h5fname=data_dir+'raw_NS_200220033_026.cxi'
 # output file
 h5fname_out=data_dir+'filtered_NS_200220033_026.cxi'
@@ -68,7 +68,7 @@ from filter_frames import resolution2frame_width
 if final_res is not None:
     # from metadata
     # Energy (converted to keV)
-    E= fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
+    E= 1305.2#fid['entry_1/instrument_1/source_1/energy'][...]*1/scipy.constants.elementary_charge
     #E = 1300 #eV
     ccd_pixel=fccd.ccd_pixel
     ccd_dist = fid['entry_1/instrument_1/detector_1/distance'][...]
@@ -87,6 +87,12 @@ center_of_mass, filter_img, shift_rescale = filter_frames.init(width, output_fra
 # we need a shift, we take it from the first frame:
 com = center_of_mass(img0*(img0>0))-width//2
 com = np.round(com)
+
+print("CENTER OF MASS")
+print(com)
+print(padded_frame_width)
+print(E)
+print(width)
 
 #  centered and downsampled frame from clean frame
 def frameXclean(img):
