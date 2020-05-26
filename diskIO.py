@@ -4,6 +4,7 @@ import os
 import json
 from PIL import Image
 import xcale.common as ptycommon
+from xcale.common.misc import printd, printv
 
 
 def read_metadata(json_file):
@@ -28,11 +29,15 @@ def read_data(metadata, json_file, my_indexes):
 
     if "dark_dir" in metadata:
 
+        printv("\nReading dark frames from disk...\n")
+
         #by default we could take the full path, but in this case it has an absolute path from PHASIS,
         #which is not good if you move data to other places
         dark_frames = read_tiffs(base_folder + os.path.basename(os.path.normpath(metadata["dark_dir"])))
 
     if "exp_dir" in metadata:
+
+        printv("\nReading raw frames from disk...\n")
 
         raw_frames = read_tiffs(base_folder + os.path.basename(os.path.normpath(metadata["exp_dir"])), my_indexes)
 

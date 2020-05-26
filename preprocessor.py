@@ -4,7 +4,8 @@ import scipy
 import scipy.constants
 import scipy.interpolate
 import scipy.signal
-from scratch.fccd import imgXraw as cleanXraw
+from fccd import imgXraw as cleanXraw
+from xcale.common.misc import printd, printv
 
 
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
@@ -27,7 +28,6 @@ def center_of_mass(img, coord_array_1d):
     return np.array([np.sum(img*coord_array_1d)/np.sum(img), np.sum(img*coord_array_1d.T)/np.sum(img)])
 
 
-#TODO: WHAT IS THIS
 def filter_frame(frame, bbox):
     return scipy.signal.convolve2d(frame, bbox, mode='same', boundary='fill')
 
@@ -57,12 +57,6 @@ def prepare(metadata, frames, dark_frames):
 
         frame_exp1 = (frames[0::2] - background_avg[0])[0]
         frame_exp2 = (frames[1::2] - background_avg[1])[0]
-
-        print("test")
-        print(frames)
-        print(frame_exp1)
-        print(frame_exp2)
-        print(metadata["double_exp_time_ratio"])
 
         # get one clean frame
         clean_frame = combine_double_exposure(cleanXraw(frame_exp1), cleanXraw(frame_exp2), metadata["double_exp_time_ratio"])
@@ -114,16 +108,14 @@ def process_stack(metadata, frames_stack, background_avg):
     kernel_width = np.max([np.int(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1])
     bbox = np.ones((kernel_width,kernel_width))
 
-    print(metadata["padded_frame_width"])
-    print(metadata["output_frame_width"])
-    print(bbox.shape)
-
     #Coordinates of the output frame onto the grid of the input frame
     coord = np.arange(-metadata["output_frame_width"]//2, metadata["output_frame_width"]//2) / metadata["output_frame_width"] * metadata["padded_frame_width"] + metadata["frame_width"]//2
 
     out_data_shape = (n_frames, metadata["output_frame_width"], metadata["output_frame_width"])
 
     out_data = np.zeros(out_data_shape, dtype= np.float32)
+
+    printv("\nProcessing the stack of raw frames...\n")
 
     for ii in np.arange(n_frames):
 
@@ -138,7 +130,6 @@ def process_stack(metadata, frames_stack, background_avg):
         #Center and downsample a clean frame
         centered_rescaled_frame = shift_rescale(filtered_frame, xx, coord, metadata["center_of_mass"])
 
-        print(clean_frame.shape)    
 
         out_data[ii] = centered_rescaled_frame
         #print('hello')
