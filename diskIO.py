@@ -19,6 +19,39 @@ def read_metadata(json_file):
     return metadata
 
 
+def read_dark_data(metadata, json_file):
+
+
+    dark_frames = None
+
+    base_folder = os.path.split(json_file)[:-1][0] + "/"
+
+    if "dark_dir" in metadata:
+
+        printv("\nReading dark frames from disk...\n")
+
+        #by default we could take the full path, but in this case it has an absolute path from PHASIS,
+        #which is not good if you move data to other places
+        dark_frames = read_tiffs(base_folder + os.path.basename(os.path.normpath(metadata["dark_dir"])))
+
+
+    return dark_frames
+
+
+
+def read_frames(metadata, json_file, my_indexes):
+
+    raw_frames = None
+
+    base_folder = os.path.split(json_file)[:-1][0] + "/"
+    directory = base_folder + os.path.basename(os.path.normpath(metadata["exp_dir"]))
+    
+    printv("\nReading raw frames from disk...\n")
+    #raw_frames = read_tiffs(base_folder + os.path.basename(os.path.normpath(metadata["exp_dir"])), my_indexes)
+    raw_frames = read_tiffs(directory, my_indexes)
+
+    return raw_frames
+
 def read_data(metadata, json_file, my_indexes):
 
 
@@ -36,7 +69,7 @@ def read_data(metadata, json_file, my_indexes):
         dark_frames = read_tiffs(base_folder + os.path.basename(os.path.normpath(metadata["dark_dir"])))
 
     if "exp_dir" in metadata:
-
+        
         printv("\nReading raw frames from disk...\n")
 
         raw_frames = read_tiffs(base_folder + os.path.basename(os.path.normpath(metadata["exp_dir"])), my_indexes)
@@ -45,6 +78,7 @@ def read_data(metadata, json_file, my_indexes):
 
 
 def read_tiffs(directory, my_indexes = None):
+    from xcale.common.communicator import rank
 
     lst=os.listdir(directory)
     lst.sort()
@@ -65,9 +99,10 @@ def read_tiffs(directory, my_indexes = None):
         im = Image.open(os.path.join(directory, fname))
         imarray = np.array(im)
         frames.append(imarray)
-        sys.stdout.write('\r file = %s/%s ' %(ii,n_frames))
-        sys.stdout.flush()
+        if rank == 0:
+            sys.stdout.write('\r file = %s/%s ' %(ii,n_frames))
+            sys.stdout.flush()
         
-    print("\n")
+    if rank == 0: print("\n")
     return np.array(frames)
 
