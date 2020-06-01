@@ -83,7 +83,7 @@ if True:
         tifs = tifffile.TiffSequence(base_folder+'/*.tif')
         class MyClass():
             def __getitem__(self, key):
-                return tifs.asarray(int(key))
+                return np.array(tifs.asarray(int(key)))
             shape=tifs.shape
 
         myobj = MyClass()

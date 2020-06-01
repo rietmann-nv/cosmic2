@@ -101,6 +101,6 @@ def imgXraw_nofilter(data): # combine operations
 
 def imgXraw(data): # combine operations
     #return imgXraw_nofilter(data)
-    return imgXtif1(tif1Xbblocks(filter_bblocks(bblocksXtif1(np.array(data)))))
+    return imgXtif1(tif1Xbblocks(filter_bblocks(bblocksXtif1(data))))
 
 

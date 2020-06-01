@@ -282,25 +282,20 @@ def process_stack1(metadata, frames_stack, background_avg, out_data = None):
     
         stack_shape = (1,centered_rescaled_frame.shape[0], centered_rescaled_frame.shape[1])
 
-        #print('chunk_slices', chunk_slices, 'type',centered_rescaled_frame.dtype, 'shape', centered_rescaled_frame.shape[0], 'new_shape', stack_shape)
         
         centered_rescaled_frame =np.reshape(centered_rescaled_frame, stack_shape) 
         
         if rank ==0:
             frames_local =  frames_chunks[0:loop_chunks[ii+1]-loop_chunks[ii],:,:]
-        #    tomo_local = frames_block[loop_chunks[ii]-loop_offset:loop_chunks[ii+1]-loop_offset,:,:]
-        #if type(pgather)!=type(None): pgather.Wait()
-        #pgather = igatherv(tomo_chunk[0:chunks[1]-chunks[0]],chunk_slices,data=tomo_local)   
+
+        
         pgather = igatherv(centered_rescaled_frame,chunk_slices,data=frames_local)   
-        #print(type)
-        if mpi_size >1:
-            pgather.Wait()
+        
+        pgather.Wait()
 
         if rank == 0:
             out_data[loop_chunks[ii]:loop_chunks[ii+1],:,:] = frames_local
-            
-        
-        # pgather = igatherv(tomo_chunk[0:chunks[1]-chunks[0]],chunk_slices,data=frames_local)   
+                   
         
         #print('hello')
         if rank == 0 :
@@ -311,14 +306,10 @@ def process_stack1(metadata, frames_stack, background_avg, out_data = None):
             sys.stdout.flush()
             #print("\n")
 
+
     if rank == 0:
         out_data.flush()
 
     return out_data
 
-
-
-
-        #sys.stdout.write('\r%s Progress: [%-50s] %3i%% ' %(string,'=' * (percent // 2), percent))
-        #sys.stdout.flush()
         
