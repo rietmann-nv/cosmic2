@@ -11,6 +11,8 @@ import diskIO
 
 import preprocessor
 
+from diskIO import frames_out 
+
 
 def convert_translations(translations):
 
@@ -148,7 +150,7 @@ if __name__ == '__main__':
 
     data_shape = (n_frames//(metadata['double_exposure']+1), metadata["output_frame_width"], metadata["output_frame_width"])
     if rank == 0:
-        out_frames, fid = io.frames_out(output_filename, data_shape)  
+        out_frames, fid = frames_out(output_filename, data_shape)  
     else:
         out_frames = 0
     
