@@ -23,9 +23,12 @@ def convert_translations(translations):
 if True:
     json_file = '/fastdata/NS/Fe/200315003/200315003_002_info.json'
  
-#if __name__ == '__main__':
-#    args = sys.argv[1:]
-#    json_file = args[0]
+if __name__ == '__main__':
+    args = sys.argv[1:]
+    try:
+        json_file = args[0]
+    except:
+        pass
 
     options = {"debug": True,
                "gpu_accelerated": False}
@@ -143,17 +146,18 @@ if True:
         #io.write(output_filename, data_dictionary, data_format = io.dataFormat) #We use the metadata we read above and drop it into the new cxi
 
 
-    data_shape = (n_frames, metadata["output_frame_width"], metadata["output_frame_width"])
+    data_shape = (n_frames//(metadata['double_exposure']+1), metadata["output_frame_width"], metadata["output_frame_width"])
     if rank == 0:
         out_frames, fid = io.frames_out(output_filename, data_shape)  
     else:
         out_frames = 0
     
-    printv('processing stacks')    
+    #printv('processing stacks')    
     #my_indexes = calculate_mpi_chunk(n_total_frames, rank, size)
 
     output_data = preprocessor.process_stack1(metadata,raw_frames,background_avg, out_frames)
-    fid.close()
+    if rank ==0:
+        fid.close()
     
     #output_data = preprocessor.process_stack(metadata, raw_frames, background_avg)
 

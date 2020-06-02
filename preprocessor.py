@@ -242,7 +242,11 @@ def process_stack1(metadata, frames_stack, background_avg, out_data = None):
     #    out_data_shape = (n_frames, metadata["output_frame_width"], metadata["output_frame_width"])
     #    out_data = np.zeros(out_data_shape, dtype= np.float32)
 
-    printv("\nProcessing the stack of raw frames...\n")
+    if metadata['double_exposure']:
+        printv("\nProcessing the stack of raw frames - double exposure...\n")
+    else:
+        printv("\nProcessing the stack of raw frames...\n")
+
 
     max_chunk_slice = 1
     loop_chunks=get_loop_chunk_slices(n_frames, mpi_size, max_chunk_slice )
@@ -254,44 +258,52 @@ def process_stack1(metadata, frames_stack, background_avg, out_data = None):
         frames_chunks = np.empty(out_data_shape,dtype=np.float32)
         
     for ii in range(loop_chunks.size-1):
+    #for ii in range(loop_chunks.size-2,loop_chunks.size-1):
         nslices = loop_chunks[ii+1]-loop_chunks[ii]
         chunk_slices = get_chunk_slices(nslices) 
         chunks=chunk_slices[rank,:]+loop_chunks[ii]
         
+        
         #printv( 'loop_chunk {}/{}:{}, mpi chunks {}'.format(ii+1,loop_chunks.size-1, loop_chunks[ii:ii+2],loop_chunks[ii]+np.append(chunk_slices[:,0],chunk_slices[-1,1]).ravel()))
         #printv( 'chunks {}'.format(chunks))
         
+        #print('rank',rank,'chunks',chunks[1]-chunks[0])
+        
         # only one frame per chunk
         ii_frames= chunks[0]
-        #print('ii_frames',ii_frames,chunks)
-
-        #    for ii_frames in np.arange(0, n_frames):
-
-        if metadata["double_exposure"]:
-            clean_frame = combine_double_exposure(cleanXraw(frames_stack[ii_frames*2]-background_avg[0]), cleanXraw(frames_stack[ii_frames*2+1]-background_avg[1]), metadata["double_exp_time_ratio"])
-            
-        else:
-            clean_frame = cleanXraw(frames_stack[ii_frames]-background_avg)
-      
-        filtered_frame = filter_frame(clean_frame, bbox)
-
-        #Center and downsample a clean frame
-        centered_rescaled_frame = shift_rescale(filtered_frame, xx, coord, metadata["center_of_mass"])
-        centered_rescaled_frame = np.float32(centered_rescaled_frame)
-
-    
-        stack_shape = (1,centered_rescaled_frame.shape[0], centered_rescaled_frame.shape[1])
-
         
-        centered_rescaled_frame =np.reshape(centered_rescaled_frame, stack_shape) 
+        # empty 
+        if chunks[1]-chunks[0] == 0:
+            centered_rescaled_frame = np.empty((0),dtype = np.float32)
+        else:            
+        
+            if metadata["double_exposure"]:
+                clean_frame = combine_double_exposure(cleanXraw(frames_stack[ii_frames*2]-background_avg[0]), cleanXraw(frames_stack[ii_frames*2+1]-background_avg[1]), metadata["double_exp_time_ratio"])
+                
+            else:
+                clean_frame = cleanXraw(frames_stack[ii_frames]-background_avg)
+          
+            filtered_frame = filter_frame(clean_frame, bbox)
+    
+            #Center and downsample a clean frame
+            centered_rescaled_frame = shift_rescale(filtered_frame, xx, coord, metadata["center_of_mass"])
+            centered_rescaled_frame = np.float32(centered_rescaled_frame)
+    
+        
+            stack_shape = (1,centered_rescaled_frame.shape[0], centered_rescaled_frame.shape[1])
+    
+            
+            centered_rescaled_frame =np.reshape(centered_rescaled_frame, stack_shape) 
         
         if rank ==0:
             frames_local =  frames_chunks[0:loop_chunks[ii+1]-loop_chunks[ii],:,:]
 
+
         
         pgather = igatherv(centered_rescaled_frame,chunk_slices,data=frames_local)   
         
-        pgather.Wait()
+        if mpi_size > 1:
+            pgather.Wait()
 
         if rank == 0:
             out_data[loop_chunks[ii]:loop_chunks[ii+1],:,:] = frames_local
@@ -300,7 +312,7 @@ def process_stack1(metadata, frames_stack, background_avg, out_data = None):
         #print('hello')
         if rank == 0 :
             #out_data.flush()
-            ii_rframe = ii_frames*(metadata["double_exposure"]+1) 
+            ii_rframe = ii_frames#*(metadata["double_exposure"]+1) 
             sys.stdout.write('\r frame {}/{}, loop_chunk {}/{}:{}, mpi chunks {}'.format(ii_rframe+1, n_frames, ii+1,loop_chunks.size-1, loop_chunks[ii:ii+2],loop_chunks[ii]+np.append(chunk_slices[:,0],chunk_slices[-1,1]).ravel()))
 #            sys.stdout.write('\r frame = %s/%s ' %(ii_frames+1, n_frames))
             sys.stdout.flush()
@@ -309,6 +321,7 @@ def process_stack1(metadata, frames_stack, background_avg, out_data = None):
 
     if rank == 0:
         out_data.flush()
+        print("\n")
 
     return out_data
 
