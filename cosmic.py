@@ -77,7 +77,7 @@ if __name__ == '__main__':
 
     base_folder = os.path.split(json_file)[:-1][0] + "/" 
     base_folder += os.path.basename(os.path.normpath(metadata["exp_dir"]))
- 
+  
     ##########
     raw_frames = map_tiffs(base_folder)
 
