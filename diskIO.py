@@ -115,15 +115,15 @@ def frames_out(file_name, shape_frames):
     
     #fid = h5py.File(file_name, 'a', driver='mpio', comm=comm)
     fid = h5py.File(file_name, 'a')
-    #mpi_barrier()
-    
+        
     if not "entry_1/data_1/" in fid: 
         fid.create_group("entry_1/data_1")
     if not '/entry_1/instrument_1/detector_1/' in fid:
         fid.create_group('/entry_1/instrument_1/detector_1/')
-        
+
     #out_frames = fid.create_dataset('entry_1/data_1/data', shape_frames , dtype='float32')
     out_frames = fid.create_dataset('/entry_1/instrument_1/detector_1/data', shape_frames , dtype='float32')
+    
 
     if "entry_1/instrument_1/detector_1/data" in fid and not "entry_1/data_1/data" in fid:
         fid["entry_1/instrument_1/detector_1/data"].attrs['axes'] = "translation:y:x" 
@@ -133,3 +133,17 @@ def frames_out(file_name, shape_frames):
 
     return out_frames, fid
 
+def map_tiffs(base_folder):
+    import tifffile
+    ## tifs = tifffile.TiffSequence(lst)
+    ##tifs = tifffile.TiffSequence(base_folder)
+    tifs = tifffile.TiffSequence(base_folder+'/*.tif')
+    class MyClass():
+        def __getitem__(self, key):
+            return np.array(tifs.asarray(int(key)))
+        shape=tifs.shape
+
+    myobj = MyClass()
+    
+    return myobj
+ 

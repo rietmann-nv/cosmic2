@@ -11,7 +11,7 @@ import diskIO
 
 import preprocessor
 
-from diskIO import frames_out 
+from diskIO import frames_out, map_tiffs
 
 
 def convert_translations(translations):
@@ -77,23 +77,6 @@ if __name__ == '__main__':
 
     base_folder = os.path.split(json_file)[:-1][0] + "/" 
     base_folder += os.path.basename(os.path.normpath(metadata["exp_dir"]))
-    #base_folder += '/'
-    # lst = os.listdir(base_folder)
-    # lst.sort()
-    # lst = [item for item in lst if item.endswith('.tif')]
-    def map_tiffs(base_folder):
-        import tifffile
-        ## tifs = tifffile.TiffSequence(lst)
-        ##tifs = tifffile.TiffSequence(base_folder)
-        tifs = tifffile.TiffSequence(base_folder+'/*.tif')
-        class MyClass():
-            def __getitem__(self, key):
-                return np.array(tifs.asarray(int(key)))
-            shape=tifs.shape
-
-        myobj = MyClass()
-        
-        return myobj
  
     ##########
     raw_frames = map_tiffs(base_folder)
