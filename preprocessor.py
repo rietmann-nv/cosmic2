@@ -64,7 +64,7 @@ def resolution2frame_width(final_res, detector_distance, energy, detector_pixel_
     hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
    
     wavelength = hc/energy
-    padded_frame_width = frame_width**2*detector_pixel_size*final_res/(detector_distance*wavelength)
+    padded_frame_width = (detector_distance*wavelength) /(detector_pixel_size*final_res)
 
     return padded_frame_width # cropped (TODO:or padded?) width of the raw clean frames
 

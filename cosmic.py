@@ -23,9 +23,10 @@ def convert_translations(translations):
 
     return new_translations
 
-if True:
-    json_file = '/fastdata/NS/Fe/200315003/200315003_002_info.json'
- 
+#if True:
+#    json_file = '/fastdata/NS/Fe/200315003/200315003_002_info.json'
+json_file = '/tomodata/NS/200220033/200220033_026_info.json'
+
 if __name__ == '__main__':
     args = sys.argv[1:]
     try:
@@ -59,7 +60,7 @@ if __name__ == '__main__':
     metadata["detector_distance"] = 0.121 #this is in meters
 
     #These here below are options, we can edit them
-    metadata["final_res"] = 5e-9 # desired final pixel size nanometers
+    metadata["final_res"] = 3e-9 # desired final pixel size nanometers
     metadata["desired_padded_input_frame_width"] = None
     metadata["output_frame_width"] = 256 # final frame width 
     metadata["translations"] = convert_translations(metadata["translations"])
