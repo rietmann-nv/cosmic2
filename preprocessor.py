@@ -5,11 +5,9 @@ import scipy.constants
 import scipy.interpolate
 import scipy.signal
 from fccd import imgXraw as cleanXraw
-from xcale.common.misc import printd, printv
+from common import printd, printv, rank, igatherv
+from common import  size as mpi_size
 
-from xcale.common.communicator import  rank
-from xcale.common.communicator import  size as mpi_size
-from xcale.common.communicator import  igatherv
 
 
 def get_chunk_slices(n_slices):

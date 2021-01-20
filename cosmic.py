@@ -1,16 +1,10 @@
 import numpy as np
-import xcale
-import xcale.common as ptycommon
-from xcale.common.cupy_common import memcopy_to_device, memcopy_to_host
-from xcale.common.misc import printd, printv
-from xcale.common.cupy_common import check_cupy_available
-from xcale.common.communicator import mpi_allGather, mpi_Bcast, mpi_Gather, rank, size, mpi_barrier
+from common import rank, size, mpi_enabled, check_cupy_available, printd, printv
 import sys
 import os
 import diskIO
 
 import preprocessor
-
 
 from diskIO import frames_out, map_tiffs
 
@@ -39,7 +33,7 @@ if __name__ == '__main__':
 
     gpu_available = check_cupy_available()
 
-    if not ptycommon.communicator.mpi_enabled:
+    if not mpi_enabled:
         printd("\nWARNING: mpi4py is not installed. MPI communication and partition won't be performed.\n" + \
                "Verify mpi4py is properly installed if you want to enable MPI communication.\n")
 
@@ -108,7 +102,7 @@ if __name__ == '__main__':
     #metadata["center_of_mass"] = mpi_Bcast(metadata["center_of_mass"], metadata["center_of_mass"], 0, mode = "cpu")
 
 
-    io = ptycommon.IO()
+    io = diskIO.IO()
     output_filename = os.path.splitext(json_file)[:-1][0][:-4] + "cosmic2.cxi"
     
     if rank == 0:
