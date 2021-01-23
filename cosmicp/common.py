@@ -23,10 +23,6 @@ else:
     size = 1
     rank = 0
 
-try:
-    import cupy as cp
-except ImportError:
-    pass
 
 def check_cupy_available():
 

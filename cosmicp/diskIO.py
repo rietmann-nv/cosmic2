@@ -4,7 +4,7 @@ import sys
 import os
 import json
 from PIL import Image
-from common import printd, printv
+from .common import printd, printv
 
 
 def read_metadata(json_file):

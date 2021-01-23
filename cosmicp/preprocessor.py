@@ -4,9 +4,9 @@ import scipy
 import scipy.constants
 import scipy.interpolate
 import scipy.signal
-from fccd import imgXraw as cleanXraw
-from common import printd, printv, rank, igatherv
-from common import  size as mpi_size
+from .fccd import imgXraw as cleanXraw
+from .common import printd, printv, rank, igatherv
+from .common import  size as mpi_size
 
 
 

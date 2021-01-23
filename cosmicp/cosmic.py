@@ -1,12 +1,14 @@
+#!/usr/bin/env python
+
 import numpy as np
-from common import rank, size, mpi_enabled, check_cupy_available, printd, printv
+from cosmicp.common import rank, size, mpi_enabled, check_cupy_available, printd, printv
 import sys
 import os
-import diskIO
+import cosmicp.diskIO as diskIO
 
-import preprocessor
+import cosmicp.preprocessor as preprocessor
 
-from diskIO import frames_out, map_tiffs
+from cosmicp.diskIO import frames_out, map_tiffs
 
 
 def convert_translations(translations):
