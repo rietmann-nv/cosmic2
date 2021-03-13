@@ -78,7 +78,7 @@ def read_data(metadata, json_file, my_indexes):
 
 
 def read_tiffs(directory, my_indexes = None):
-    from xcale.common.communicator import rank
+    from cosmicp.common import rank
 
     lst=os.listdir(directory)
     lst.sort()

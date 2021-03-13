@@ -66,7 +66,7 @@ setup_info = dict(
     include_package_data=True,
     entry_points={},
 
-    install_requires=['numpy', 'h5py', 'Pillow', 'scipy'],
+    install_requires=['numpy', 'h5py==2.10.0', 'Pillow', 'scipy', 'tifffile', 'mpi4py'],
 
     extras_require={
         "cupy": ["cupy"],
