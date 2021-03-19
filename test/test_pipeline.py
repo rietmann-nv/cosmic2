@@ -141,7 +141,7 @@ def main():
     # Results on 1080Ti: Jax vmap (100 images): 0.0467481940286234s, 0.000467481940286234s / img
     print("Jax vmap ({} images): {}s, {}s / img".format(NUM_IMAGES, end-start, (end-start)/NUM_IMAGES))
 
-    f, (ax1, ax2, ax3) = plt.subplots(1,3)
+    _, (ax1, ax2, ax3) = plt.subplots(1,3)
     ax1.matshow(np.log(finalFrames[0, : ,:] + 1.))
     ax1.set_title("NumPy")
     ax2.matshow(np.log(finalFrames_jax_vmap[0, :, :] + 1.))
