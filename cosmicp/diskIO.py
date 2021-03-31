@@ -108,12 +108,7 @@ def read_tiffs(directory, my_indexes = None):
 
 def frames_out(file_name, shape_frames):
     import h5py
-    #from xcale.common.communicator import  rank, mpi_barrier, comm
- 
-    #if data_format is None: 
-    #    data_format = self.metadataFormat 
-    
-    #fid = h5py.File(file_name, 'a', driver='mpio', comm=comm)
+
     fid = h5py.File(file_name, 'a')
         
     if not "entry_1/data_1/" in fid: 

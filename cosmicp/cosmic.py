@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 
+import os
+#You can also go with os.environ["JAX_PLATFORM_NAME"] = 'cpu', but for some reason that still reserves some GPU memory even though it apparently runs only on CPU. 
+#With this way GPUs are not touched
+#os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import numpy as np
-from cosmicp.common import rank, size, mpi_enabled, check_cupy_available, printd, printv
+from cosmicp.common import rank, size, mpi_enabled, printd, printv, set_visible_device
+from cosmicp.options import parse_arguments
 import sys
 import os
 import cosmicp.diskIO as diskIO
-
-import cosmicp.preprocessor as preprocessor
 
 from cosmicp.diskIO import frames_out, map_tiffs
 
@@ -19,37 +23,34 @@ def convert_translations(translations):
 
     return new_translations
 
-#if True:
-#    json_file = '/fastdata/NS/Fe/200315003/200315003_002_info.json'
-json_file = '/tomodata/NS/200220033/200220033_026_info.json'
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    try:
-        json_file = args[0]
-    except:
-        pass
 
-    options = {"debug": True,
-               "gpu_accelerated": False}
-
-    gpu_available = check_cupy_available()
+    options = parse_arguments(args)
 
     if not mpi_enabled:
         printd("\nWARNING: mpi4py is not installed. MPI communication and partition won't be performed.\n" + \
                "Verify mpi4py is properly installed if you want to enable MPI communication.\n")
 
-    if not gpu_available and options["gpu_accelerated"]:
-        printd("\nWARNING: GPU mode was selected, but CuPy is not installed.\n" + \
-               "Verify CuPy is properly installed to enable GPU acceleration.\n" + \
-               "Switching to CPU mode...\n")
 
-        options["gpu_accelerated"] = False
+    if options["gpu_accelerated"]:
+        device_order, visible_devices, n_gpus = set_visible_device(rank)
+
+        printd("Number of GPUs on this host = " + str(n_gpus))
+        printd("GPU devices occupancy order: " + str(device_order))
+        printd("GPU visible devices for this process = " + str(visible_devices))
+
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        printd("Running on CPU, enable -g option to run on GPU")
 
 
- 
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2" #this removes some log messages from jax/tensorflow but apparently it is not working
+    import jax
+    import cosmicp.preprocessor as preprocessor
 
-    metadata = diskIO.read_metadata(json_file)
+    metadata = diskIO.read_metadata(options["fname"])
 
     #These do not change
     metadata["detector_pixel_size"] = 30e-6  # 30 microns
@@ -69,11 +70,11 @@ if __name__ == '__main__':
     n_total_frames = metadata["translations"].shape[0]
     if metadata["double_exposure"]: n_total_frames *= 2
 
-    dark_frames = diskIO.read_dark_data(metadata, json_file)
+    dark_frames = diskIO.read_dark_data(metadata, options["fname"])
 
     ##########   
 
-    base_folder = os.path.split(json_file)[:-1][0] + "/" 
+    base_folder = os.path.split(options["fname"])[:-1][0] + "/" 
     base_folder += os.path.basename(os.path.normpath(metadata["exp_dir"]))
   
     ##########
@@ -105,11 +106,11 @@ if __name__ == '__main__':
 
 
     io = diskIO.IO()
-    output_filename = os.path.splitext(json_file)[:-1][0][:-4] + "cosmic2.cxi"
+    output_filename = os.path.splitext(options["fname"])[:-1][0][:-4] + "cosmic2.cxi"
     
     if rank == 0:
 
-        #output_filename = os.path.splitext(json_file)[:-1][0] + "_cosmic2.cxi"
+        #output_filename = os.path.splitext(options["fname"])[:-1][0] + "_cosmic2.cxi"
 
         printv("\nSaving cxi file metadata: " + output_filename + "\n")
 
@@ -122,7 +123,6 @@ if __name__ == '__main__':
             pass
 
         #import time
-        #print('hello')
         #time.sleep(10)
 
         io.write(output_filename, metadata, data_format = io.metadataFormat) #We generate a new cxi with the new data
@@ -138,7 +138,11 @@ if __name__ == '__main__':
     #printv('processing stacks')    
     #my_indexes = calculate_mpi_chunk(n_total_frames, rank, size)
 
-    output_data = preprocessor.process_stack1(metadata,raw_frames,background_avg, out_frames)
+    del metadata["hdr_path"]
+    del metadata["dark_dir"]
+    del metadata["exp_dir"]
+
+    output_data = preprocessor.process_stack(metadata, raw_frames,background_avg, out_frames)
     if rank ==0:
         fid.close()
     

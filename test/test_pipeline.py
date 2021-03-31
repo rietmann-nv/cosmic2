@@ -1,5 +1,10 @@
 # hello
 
+import os
+#You can also go with os.environ["JAX_PLATFORM_NAME"] = 'cpu', but for some reason that still reserves some GPU memory even though it apparently runs only on CPU. 
+#With this way GPUs are not touched
+#os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 import jax.numpy as jnp
 import jax
 
@@ -7,8 +12,8 @@ import cupy
 
 import cosmicp.fccd as fccd ##this module filters the data
 import cosmicp.preprocessor as preprocessor ##this module mostly does data handling
-import cosmicp.fccd_jax as fccd_jax
-import cosmicp.preprocessor_jax as preprocessor_jax
+import cosmicp.fccd as fccd_jax
+import cosmicp.preprocessor as preprocessor_jax
 
 import cosmicp.diskIO as diskIO ##reads TIFs from disk in chunks
 from skimage.io import imread
@@ -19,6 +24,8 @@ from timeit import default_timer as timer
 import numpy as np
 
 import IPython
+
+
 
 def numpy_pipeline(darkFrames, longTIF, shortTIF, metadata):
 
@@ -77,9 +84,12 @@ def jax_pipeline(darkFrames, longTIFs, shortTIFs, metadata):
 
 def main():
 
+
     print("Loading data")
     ##metadata is saved by the control system into a JSON file.  Analysis code reads from here
-    jsonFile = '../Data/NS_200805056/200805056/200805056_002_info.json'
+
+    jsonFile = '/home/pablo/ALS_preprocessor_data/190602068/190602068_002_info.json'
+    #jsonFile = '../Data/NS_200805056/200805056/200805056_002_info.json'
     metadata = diskIO.read_metadata(jsonFile)
     ##load the dark frames from disk.  These need to be averaged for processing of data frames.
     darkFrames = diskIO.read_dark_data(metadata,jsonFile)
@@ -89,8 +99,13 @@ def main():
     ##show the processing.  Frames are named image000000.tif, image000001.tif, etc.  Even numbers are long
     ##exposure and odd numbers are short exposure
     ##background TIFs are in directory 001 and data TIFs in 002
-    longTIFile = '../Data/NS_200805056/200805056/002/image000000.tif'
-    shortTIFile = '../Data/NS_200805056/200805056/002/image000001.tif'
+    longTIFile = '/home/pablo/ALS_preprocessor_data/190602068/002/image000000.tif'
+    shortTIFile = '/home/pablo/ALS_preprocessor_data/190602068/002/image000001.tif'
+
+    #longTIFile = '../Data/NS_200805056/200805056/002/image000000.tif'
+    #shortTIFile = '../Data/NS_200805056/200805056/002/image000001.tif'
+
+
     longTIF = imread(longTIFile)
     shortTIF = imread(shortTIFile)
 
