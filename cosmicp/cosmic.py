@@ -24,6 +24,39 @@ def convert_translations(translations):
     return new_translations
 
 
+def preprocessing_pipeline(metadata, dark_frames, raw_frames):
+
+    n_frames = raw_frames.shape[0]
+
+    #This takes the center of a chunk as a center frame(s)
+    #center = np.int(n_frames)//2
+    #This takes the center of the stack as a center frame(s)
+    center = np.int(n_total_frames)//2
+
+    #Check this in case we are in double exposure
+    if center % 2 == 1:
+        center -= 1
+
+    if metadata["double_exposure"]:
+        metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
+        center_frames = np.array([raw_frames[center], raw_frames[center + 1]])
+    else:
+        center_frames = raw_frames[center]
+    
+    
+    #print('energy (eV)',metadata['energy'])
+    metadata, background_avg =  preprocessor.prepare(metadata, center_frames, dark_frames)
+    #print('energy (J)',metadata['energy'])
+    #we take the center of mass from rank 0
+    #metadata["center_of_mass"] = mpi_Bcast(metadata["center_of_mass"], metadata["center_of_mass"], 0, mode = "cpu")
+
+    data_shape = (n_frames//(metadata['double_exposure']+1), metadata["output_frame_width"], metadata["output_frame_width"])
+    out_frames = np.zeros(data_shape)
+
+    output_data = preprocessor.process_stack(metadata, raw_frames,background_avg, out_frames)
+
+    return output_data
+
 if __name__ == '__main__':
     args = sys.argv[1:]
 
@@ -80,30 +113,9 @@ if __name__ == '__main__':
     ##########
     raw_frames = map_tiffs(base_folder)
 
-    n_frames = raw_frames.shape[0]
-
-    #This takes the center of a chunk as a center frame(s)
-    #center = np.int(n_frames)//2
-    #This takes the center of the stack as a center frame(s)
-    center = np.int(n_total_frames)//2
-
-    #Check this in case we are in double exposure
-    if center % 2 == 1:
-        center -= 1
-
-    if metadata["double_exposure"]:
-        metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
-        center_frames = np.array([raw_frames[center], raw_frames[center + 1]])
-    else:
-        center_frames = raw_frames[center]
+    # ....
     
-    
-    #print('energy (eV)',metadata['energy'])
-    metadata, background_avg =  preprocessor.prepare(metadata, center_frames, dark_frames)
-    #print('energy (J)',metadata['energy'])
-    #we take the center of mass from rank 0
-    #metadata["center_of_mass"] = mpi_Bcast(metadata["center_of_mass"], metadata["center_of_mass"], 0, mode = "cpu")
-
+    output_data = preprocessing_pipeline(metadata, dark_frames, raw_frames)
 
     io = diskIO.IO()
     output_filename = os.path.splitext(options["fname"])[:-1][0][:-4] + "cosmic2.cxi"
@@ -129,12 +141,20 @@ if __name__ == '__main__':
         #io.write(output_filename, data_dictionary, data_format = io.dataFormat) #We use the metadata we read above and drop it into the new cxi
 
 
-    data_shape = (n_frames//(metadata['double_exposure']+1), metadata["output_frame_width"], metadata["output_frame_width"])
+
+
+    data_shape = output_data.shape
+
     if rank == 0:
         out_frames, fid = frames_out(output_filename, data_shape)  
     else:
         out_frames = 0
+
     
+
+    # write to HDF5 file
+    out_frames[:, :, :] = output_data[:, :, :]
+
     #printv('processing stacks')    
     #my_indexes = calculate_mpi_chunk(n_total_frames, rank, size)
 
@@ -142,7 +162,7 @@ if __name__ == '__main__':
     del metadata["dark_dir"]
     del metadata["exp_dir"]
 
-    output_data = preprocessor.process_stack(metadata, raw_frames,background_avg, out_frames)
+    
     if rank ==0:
         fid.close()
     
