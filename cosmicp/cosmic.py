@@ -5,7 +5,9 @@ import os
 #With this way GPUs are not touched
 #os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-import numpy as np
+import numpy as onp
+import jax.numpy as np
+import jax
 from cosmicp.common import rank, size, mpi_enabled, printd, printv, set_visible_device
 from cosmicp.options import parse_arguments
 import sys
@@ -13,7 +15,7 @@ import os
 import cosmicp.diskIO as diskIO
 
 from cosmicp.diskIO import frames_out, map_tiffs
-
+from timeit import default_timer as timer
 
 def convert_translations(translations):
 
@@ -26,12 +28,15 @@ def convert_translations(translations):
 
 def preprocessing_pipeline(metadata, dark_frames, raw_frames):
 
+    raw_frames = np.array(raw_frames)
+    dark_frames = np.array(dark_frames)
+
     n_frames = raw_frames.shape[0]
 
     #This takes the center of a chunk as a center frame(s)
     #center = np.int(n_frames)//2
     #This takes the center of the stack as a center frame(s)
-    center = np.int(n_total_frames)//2
+    center = int(n_total_frames)//2
 
     #Check this in case we are in double exposure
     if center % 2 == 1:
@@ -45,6 +50,7 @@ def preprocessing_pipeline(metadata, dark_frames, raw_frames):
     
     
     #print('energy (eV)',metadata['energy'])
+    
     metadata, background_avg =  preprocessor.prepare(metadata, center_frames, dark_frames)
     #print('energy (J)',metadata['energy'])
     #we take the center of mass from rank 0
@@ -111,15 +117,26 @@ if __name__ == '__main__':
     base_folder += os.path.basename(os.path.normpath(metadata["exp_dir"]))
   
     ##########
-    raw_frames = map_tiffs(base_folder)
+    raw_frames_tiff = map_tiffs(base_folder)
+    num_frames = raw_frames_tiff.shape[0]
+    framesize = raw_frames_tiff['0'].shape
+
+    print("Number of frames: {}, framesize: {}, estimated bytes: {}".format(num_frames, framesize,
+                                                                            num_frames * framesize[0] * framesize[1] * 8))
+
+    raw_frames = np.zeros((num_frames, framesize[0], framesize[1]))
+    for i in range(num_frames):
+        raw_frames = jax.ops.index_update(raw_frames, jax.ops.index[i, :, :], raw_frames_tiff[str(i)])
 
     # ....
-    
+    start = timer()
     output_data = preprocessing_pipeline(metadata, dark_frames, raw_frames)
+    end = timer()
+    print("Preprocessing time: ", end-start)
 
     io = diskIO.IO()
     output_filename = os.path.splitext(options["fname"])[:-1][0][:-4] + "cosmic2.cxi"
-    
+
     if rank == 0:
 
         #output_filename = os.path.splitext(options["fname"])[:-1][0] + "_cosmic2.cxi"
