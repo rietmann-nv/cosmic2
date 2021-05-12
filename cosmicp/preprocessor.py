@@ -262,7 +262,8 @@ def process_stack(metadata, frames_stack, background_avg, out_data):
             pgather.Wait()
 
         if rank == 0:
-            out_data[loop_chunks[ii]:loop_chunks[ii+1],:,:] = frames_local
+            # out_data[loop_chunks[ii]:loop_chunks[ii+1],:,:] = frames_local
+            out_data = jax.ops.index_update(out_data, jax.ops.index[loop_chunks[ii]:loop_chunks[ii+1],:,:], frames_local)
                    
         if rank == 0 :
  

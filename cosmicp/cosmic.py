@@ -13,6 +13,9 @@ from cosmicp.options import parse_arguments
 import sys
 import os
 import cosmicp.diskIO as diskIO
+import cosmicp.preprocessor as preprocessor
+
+import IPython
 
 from cosmicp.diskIO import frames_out, map_tiffs
 from timeit import default_timer as timer
@@ -32,7 +35,7 @@ def preprocessing_pipeline(metadata, dark_frames, raw_frames):
     dark_frames = np.array(dark_frames)
 
     n_frames = raw_frames.shape[0]
-
+    n_total_frames = metadata["translations"].shape[0]
     #This takes the center of a chunk as a center frame(s)
     #center = np.int(n_frames)//2
     #This takes the center of the stack as a center frame(s)
@@ -121,8 +124,10 @@ if __name__ == '__main__':
     num_frames = raw_frames_tiff.shape[0]
     framesize = raw_frames_tiff['0'].shape
 
-    print("Number of frames: {}, framesize: {}, estimated bytes: {}".format(num_frames, framesize,
-                                                                            num_frames * framesize[0] * framesize[1] * 8))
+    print("Number of frames[{}]: {}, framesize: {}, estimated GB: {}".format(base_folder, num_frames, framesize,
+                                                                             num_frames * framesize[0] * framesize[1] * 8 / 1e9))
+    
+    
 
     raw_frames = np.zeros((num_frames, framesize[0], framesize[1]))
     for i in range(num_frames):
@@ -133,6 +138,8 @@ if __name__ == '__main__':
     output_data = preprocessing_pipeline(metadata, dark_frames, raw_frames)
     end = timer()
     print("Preprocessing time: ", end-start)
+
+    print("output_data size: {}".format(output_data.shape))
 
     io = diskIO.IO()
     output_filename = os.path.splitext(options["fname"])[:-1][0][:-4] + "cosmic2.cxi"

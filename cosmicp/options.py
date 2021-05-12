@@ -24,18 +24,21 @@ def parse_arguments(args, options = None):
         opts, args_left = getopt.getopt(args,"hg", \
                               ["iterations=", "mode=", "bkg_ref=", "illum_ref=", "poisson=", "res_comp=", "illum_mask", "det_mask", \
                                "crop=", "ranks_gpu=", "gpu_weight=","debug", "iter_output=", "save_cxi", "hypers_samples=", "hypers_iter=",\
-                               "hypers_share_illum", "hypers_share_backg", "out_of_focus_distance=", "save_frames", "single_overlap"])
+                               "hypers_share_illum", "hypers_share_backg", "out_of_focus_distance=", "save_frames", "single_overlap", "limit_num_images="])
 
     except getopt.GetoptError:
         printv(help)
         sys.exit(2)
 
+    print("opts=", opts)
     for opt, arg in opts:
         if opt == '-h':
             printv(help)
             sys.exit()
         elif opt in ("-g", "--gpu_accelerated"):
             options["gpu_accelerated"] = True
+        if opt in ("--limit_num_images"):
+            options["limit_num_images"] = int(arg)
 
 
     if len(args_left) is not 1:
@@ -46,6 +49,8 @@ def parse_arguments(args, options = None):
     else:
         options["fname"] = args_left[0]
 
+    print("options=", options)
+    
     return options
 
 
