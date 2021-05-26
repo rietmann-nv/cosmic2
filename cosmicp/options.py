@@ -18,13 +18,11 @@ def parse_arguments(args, options = None):
         raise Exception("Must provide an input JSON file")
 
     if options is None:
-        options = {"gpu_accelerated": False}
+        options = {"gpu_accelerated": False, "limit_num_images": None}
 
     try:
-        opts, args_left = getopt.getopt(args,"hg", \
-                              ["iterations=", "mode=", "bkg_ref=", "illum_ref=", "poisson=", "res_comp=", "illum_mask", "det_mask", \
-                               "crop=", "ranks_gpu=", "gpu_weight=","debug", "iter_output=", "save_cxi", "hypers_samples=", "hypers_iter=",\
-                               "hypers_share_illum", "hypers_share_backg", "out_of_focus_distance=", "save_frames", "single_overlap", "limit_num_images="])
+        opts, args_left = getopt.getopt(args,"hgl:", \
+                              ["gpu_accelerated", "limit_num_images="])
 
     except getopt.GetoptError:
         printv(help)
@@ -37,7 +35,7 @@ def parse_arguments(args, options = None):
             sys.exit()
         elif opt in ("-g", "--gpu_accelerated"):
             options["gpu_accelerated"] = True
-        if opt in ("--limit_num_images"):
+        if opt in ("-l", "--limit_num_images"):
             options["limit_num_images"] = int(arg)
 
 

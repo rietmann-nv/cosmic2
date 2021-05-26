@@ -36,8 +36,7 @@ def preprocessing_pipeline(metadata, dark_frames, raw_frames):
 
     n_frames = raw_frames.shape[0]
     n_total_frames = metadata["translations"].shape[0]
-    #This takes the center of a chunk as a center frame(s)
-    #center = np.int(n_frames)//2
+
     #This takes the center of the stack as a center frame(s)
     center = int(n_total_frames)//2
 
@@ -55,9 +54,7 @@ def preprocessing_pipeline(metadata, dark_frames, raw_frames):
     #print('energy (eV)',metadata['energy'])
     
     metadata, background_avg =  preprocessor.prepare(metadata, center_frames, dark_frames)
-    #print('energy (J)',metadata['energy'])
-    #we take the center of mass from rank 0
-    #metadata["center_of_mass"] = mpi_Bcast(metadata["center_of_mass"], metadata["center_of_mass"], 0, mode = "cpu")
+
 
     data_shape = (n_frames//(metadata['double_exposure']+1), metadata["output_frame_width"], metadata["output_frame_width"])
     out_frames = np.zeros(data_shape)
@@ -65,6 +62,8 @@ def preprocessing_pipeline(metadata, dark_frames, raw_frames):
     output_data = preprocessor.process_stack(metadata, raw_frames,background_avg, out_frames)
 
     return output_data
+
+
 
 if __name__ == '__main__':
     args = sys.argv[1:]
@@ -135,7 +134,7 @@ if __name__ == '__main__':
 
     # ....
     start = timer()
-    output_data = preprocessing_pipeline(metadata, dark_frames, raw_frames)
+    output_data, _ = preprocessing_pipeline(metadata, dark_frames, raw_frames)
     end = timer()
     print("Preprocessing time: ", end-start)
 
@@ -165,22 +164,17 @@ if __name__ == '__main__':
         #io.write(output_filename, data_dictionary, data_format = io.dataFormat) #We use the metadata we read above and drop it into the new cxi
 
 
-
-
     data_shape = output_data.shape
 
     if rank == 0:
         out_frames, fid = frames_out(output_filename, data_shape)  
     else:
         out_frames = 0
-
     
 
     # write to HDF5 file
     out_frames[:, :, :] = output_data[:, :, :]
 
-    #printv('processing stacks')    
-    #my_indexes = calculate_mpi_chunk(n_total_frames, rank, size)
 
     del metadata["hdr_path"]
     del metadata["dark_dir"]
@@ -189,13 +183,5 @@ if __name__ == '__main__':
     
     if rank ==0:
         fid.close()
-    
-    #output_data = preprocessor.process_stack(metadata, raw_frames, background_avg)
-
-    #data_dictionary = {}
-    #data_dictionary.update({"data" : output_data})
-
-
-    #we gather all results into rank 0
-    #data_dictionary["data"] = mpi_Gather(data_dictionary["data"], data_dictionary["data"], 0, mode = "cpu")
+  
 

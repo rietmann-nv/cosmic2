@@ -33,6 +33,20 @@ def printv(string):
     if rank is 0:
         print(string)
 
+def gather(local, shape, dtype):
+
+    sendbuf = np.array(local)
+
+    if rank == 0:
+        #print("sendcounts: {}, total: {}".format(sendcounts, sum(sendcounts)))
+        recvbuf = np.empty(shape, dtype)
+        print(recvbuf.shape)
+    else:
+        recvbuf = None
+
+    comm.Gatherv(sendbuf=sendbuf, recvbuf=recvbuf)
+
+    return recvbuf
 
 def igatherv(data_local,chunk_slices, data = None): 
     if size==1: 

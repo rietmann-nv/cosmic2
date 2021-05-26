@@ -135,7 +135,7 @@ def map_tiffs(base_folder):
     tifs = tifffile.TiffSequence(base_folder+'/*.tif')
     class MyClass():
         def __getitem__(self, key):
-            return np.array(tifs.asarray(int(key)))
+            return np.array(tifs.asarray(key))
         shape=tifs.shape
 
     myobj = MyClass()

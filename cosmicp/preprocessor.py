@@ -1,4 +1,5 @@
 import sys
+import os
 import jax.numpy as np
 import jax
 import scipy
@@ -6,9 +7,11 @@ import scipy.constants
 import scipy.interpolate
 import scipy.signal
 import numpy as npo
+import math
 from .fccd import imgXraw as cleanXraw
-from .common import printd, printv, rank, igatherv
+from .common import printd, printv, rank, igatherv, gather
 from .common import  size as mpi_size
+from .diskIO import IO, frames_out
 
 
 def get_chunk_slices(n_slices):
@@ -164,6 +167,8 @@ def prepare(metadata, frames, dark_frames):
 
     metadata["center_of_mass"] = metadata["output_frame_width"]//2 - com
 
+    metadata["output_padded_ratio"] = metadata["output_frame_width"]/metadata["padded_frame_width"]
+
 
     return metadata, background_avg
 
@@ -231,12 +236,13 @@ def process_stack(metadata, frames_stack, background_avg, out_data):
         nslices = loop_chunks[ii+1]-loop_chunks[ii]
         chunk_slices.append(get_chunk_slices(nslices)) 
         chunks.append(chunk_slices[-1][rank,:]+loop_chunks[ii])
-
+    #This stored the frames indexes are being process by this mpi rank
+    my_indexes = []
     for ii in range(loop_chunks.size-1):
         
         # only one frame per chunk
         ii_frames= chunks[ii][0]
-        
+        my_indexes.append(ii_frames)
         # empty 
         if chunks[ii][1]-chunks[ii][0] == 0:
             centered_rescaled_frame = np.empty((0),dtype = np.float32)
@@ -273,6 +279,148 @@ def process_stack(metadata, frames_stack, background_avg, out_data):
             sys.stdout.flush()
             #print("\n")
 
-    return out_data
+    return out_data, my_indexes
+
+
+
+def prepare_2(metadata, dark_frames, raw_frames):
+
+    dark_frames = np.array(dark_frames)
+
+    n_frames = raw_frames.shape[0]
+    n_total_frames = metadata["translations"].shape[0]
+
+    #This takes the center of the stack as a center frame(s)
+    center = int(n_total_frames)//2
+
+    #Check this in case we are in double exposure
+    if center % 2 == 1:
+        center -= 1
+
+    if metadata["double_exposure"]:
+        metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
+        center_frames = np.array([raw_frames[center], raw_frames[center + 1]])
+    else:
+        center_frames = raw_frames[center]
+   
+    
+    metadata, background_avg =  prepare(metadata, center_frames, dark_frames)
+
+    return metadata, background_avg
+
+
+def process(metadata, raw_frames_tiff, background_avg):
+
+    local_batch_size = 10
+    batch_size = mpi_size * local_batch_size
+
+    n_frames = raw_frames_tiff.shape[0]
+
+    printv(n_frames)
+    
+    if metadata["double_exposure"]:
+        printv("\nProcessing the stack of raw frames - double exposure...\n")
+        n_frames //= 2 # 1/2 for double exposure
+    else:
+        printv("\nProcessing the stack of raw frames...\n")
+
+    #This stores the frames indexes that are being process by this mpi rank
+    my_indexes = []
+    import cosmicp.diskIO as diskIO
+    n_batches = raw_frames_tiff.shape[0] // batch_size
+
+    #Here we correct if the total number of frames is not a multiple of batch_size  
+    extra = raw_frames_tiff.shape[0] - (n_batches * batch_size)
+    print(extra)
+    if rank * local_batch_size < extra: 
+        n_batches = n_batches + 1
+    
+    out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
+    out_data = npo.empty(out_data_shape,dtype=np.float32)
+    frames_batch = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+
+    #Convolution kernel
+    kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
+    kernel_box = np.ones((kernel_width,kernel_width))
+
+    printd(n_batches)
+
+    for i in range(0, n_batches):
+
+        local_i = ((i * batch_size) + (rank * local_batch_size)) 
+
+        local_range = range(local_i // (metadata['double_exposure']+1) , (local_i  + local_batch_size) // (metadata['double_exposure']+1))
+
+        my_indexes.extend(local_range)
+        #if rank == 0: print(my_indexes)
+
+        for j in range(local_i, local_i  + local_batch_size) : frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
+
+        process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
+
+    return out_data, my_indexes
+
+def process_batch(metadata, frames_batch, background_avg, out_data, out_index, kernel_box, local_batch_size):
+
+    #printd(out_index)
+    for i in range(0, local_batch_size, metadata['double_exposure']+1):       
+        
+        if metadata["double_exposure"]:
+            clean_frame = combine_double_exposure(cleanXraw(frames_batch[i]-background_avg[0]), \
+                                                  cleanXraw(frames_batch[i+1]-background_avg[1]), metadata["double_exp_time_ratio"])           
+        else:
+            clean_frame = cleanXraw(frames_batch[i]-background_avg)
+          
+        filtered_frame = filter_frame(clean_frame, kernel_box)
+
+        centered_rescaled_frame = shift_rescale(filtered_frame, metadata["center_of_mass"], metadata["output_frame_width"], metadata["output_padded_ratio"])
+
+        out_data[out_index] = centered_rescaled_frame
+
+        out_index += 1 
+
+
+def save_results(fname, metadata, local_data, my_indexes, n_frames):
+
+    print(len(my_indexes))
+    frames_gather = gather(local_data, (n_frames, local_data[0].shape[0], local_data[0].shape[1]), npo.float32)
+
+    #we need the indexes too to map properly each gathered frame
+    print(type(my_indexes[0]))
+    index_gather = gather(my_indexes, n_frames, int)
+
+    if rank == 0:
+
+        import sys
+        import numpy
+        #numpy.set_printoptions(threshold=sys.maxsize)
+        print(index_gather)
+        print(index_gather.shape)
+
+        print("Output_data size: {}".format(frames_gather.shape))
+
+        io = IO()
+        output_filename = os.path.splitext(fname)[:-1][0][:-4] + "cosmic2.cxi"
+
+        printv("\nSaving cxi file metadata: " + output_filename + "\n")
+
+        #This deletes and rewrites a previous file with the same name
+        try:
+            os.remove(output_filename)
+        except OSError:
+            pass
+
+        io.write(output_filename, metadata, data_format = io.metadataFormat) #We generate a new cxi with the new data
+   
+
+        data_shape = frames_gather.shape
+        out_frames, fid = frames_out(output_filename, data_shape)  
+
+        out_frames[:, :, :] = frames_gather[index_gather]
+
+    
+    if rank ==0:
+        fid.close()
+
 
         
