@@ -2,6 +2,7 @@ import sys
 import os
 import jax.numpy as np
 import jax
+import jax.ops
 import scipy
 import scipy.constants
 import scipy.interpolate
@@ -13,6 +14,8 @@ from .common import printd, printv, rank, igatherv, gather
 from .common import  size as mpi_size
 from .diskIO import IO, frames_out
 
+from timeit import default_timer as timer
+from cupy.cuda.nvtx import RangePush, RangePop
 
 def get_chunk_slices(n_slices):
 
@@ -309,8 +312,9 @@ def prepare_2(metadata, dark_frames, raw_frames):
     return metadata, background_avg
 
 
-def process(metadata, raw_frames_tiff, background_avg):
+def process(metadata, raw_frames_tiff, background_avg_np):
 
+    # larger batch size is usually better...
     local_batch_size = 10
     batch_size = mpi_size * local_batch_size
 
@@ -336,8 +340,11 @@ def process(metadata, raw_frames_tiff, background_avg):
         n_batches = n_batches + 1
     
     out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
-    out_data = npo.empty(out_data_shape,dtype=np.float32)
-    frames_batch = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+    out_data = np.empty(out_data_shape,dtype=np.float32)
+
+    frames_batch_np = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+    print("Number of frames ({}x{}): ", raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[0], raw_frames_tiff.shape[0])
+    print("Output shape: ", out_data_shape)
 
     #Convolution kernel
     kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
@@ -345,8 +352,23 @@ def process(metadata, raw_frames_tiff, background_avg):
 
     printd(n_batches)
 
-    for i in range(0, n_batches):
+    # jax jit & vmap preparations
+    # These functions have to be persistent across loop iterations, because their first-use compilation (expensive) is cached.
+    background_avg = np.asarray(background_avg_np)
+    cleanXraw_vmap_f0 = jax.vmap(lambda x: cleanXraw(x - background_avg[0]))
+    cleanXraw_vmap_f1 = jax.vmap(lambda x: cleanXraw(x - background_avg[1]))
+    combine_double_exposure_vmapf = jax.vmap(lambda x, y: combine_double_exposure(x, y, metadata["double_exp_time_ratio"]))
+    f_cleanframes = jax.jit(lambda x, y: combine_double_exposure_vmapf(cleanXraw_vmap_f0(x), cleanXraw_vmap_f1(y)))
+    def f(clean_frame):
+        filtered_frame = filter_frame(clean_frame, kernel_box)
+        centered_rescaled_frame = shift_rescale(filtered_frame, metadata["center_of_mass"], metadata["output_frame_width"], metadata["output_padded_ratio"])
+        return centered_rescaled_frame
+    process_batch_vmapf = jax.vmap(f)
+    f_all = jax.jit(lambda x, y: process_batch_vmapf(f_cleanframes(x, y)))
 
+    start = timer()
+    for i in range(0, n_batches):
+        start_i = timer()
         local_i = ((i * batch_size) + (rank * local_batch_size)) 
 
         local_range = range(local_i // (metadata['double_exposure']+1) , (local_i  + local_batch_size) // (metadata['double_exposure']+1))
@@ -354,11 +376,42 @@ def process(metadata, raw_frames_tiff, background_avg):
         my_indexes.extend(local_range)
         #if rank == 0: print(my_indexes)
 
-        for j in range(local_i, local_i  + local_batch_size) : frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
+        i_s = i * local_batch_size // (metadata['double_exposure']+1)
+        i_e = i_s + local_batch_size // (metadata['double_exposure']+1)
 
-        process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
+        RangePush("HDF5 -> NumPy")
+        start_hdf5 = timer()
+        for j in range(local_i, local_i  + local_batch_size) : frames_batch_np[j % local_batch_size] = raw_frames_tiff[j][:, :]
+        end_hdf5 = timer()
+        RangePop()
+        RangePush("NumPy -> JAX")
+        start_HtoD_xfer = timer()
+        frames_batch = np.array(frames_batch_np).block_until_ready()
+        end_HtoD_xfer = timer()
+        RangePop()
+        
+        # non-vmap version
+        # process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
+        
+        RangePush("preprocessing")
+        start_jax = timer()
+
+        # TODO: this variable picks up an additional dimension somehow, should fix this...
+        centered_rescaled_frames_jax = f_all(frames_batch[:-1:2], frames_batch[1::2])
+        out_data = jax.ops.index_update(out_data, jax.ops.index[i_s:i_e, :, :], centered_rescaled_frames_jax[:,0,:,:]).block_until_ready()
+        end_i = timer()
+        if i % 10 == 0:
+            print("i={} ({}s per image, {}s disk, {}s HtoD, {}s jax)".format(i,(end_i-start_i)/local_batch_size,
+                                                                             (end_hdf5-start_hdf5)/local_batch_size,
+                                                                             (end_HtoD_xfer-start_HtoD_xfer)/local_batch_size,
+                                                                             (end_i-start_jax)/local_batch_size))
+        RangePop()
+
+    end = timer()
+    print("Total time preprocessing: ", end-start)
 
     return out_data, my_indexes
+
 
 def process_batch(metadata, frames_batch, background_avg, out_data, out_index, kernel_box, local_batch_size):
 
