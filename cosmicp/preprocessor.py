@@ -1,8 +1,10 @@
 import sys
 import os
 import jax.numpy as np
+import cupy as cp
 import jax
 import jax.ops
+import jax.dlpack
 import scipy
 import scipy.constants
 import scipy.interpolate
@@ -342,7 +344,7 @@ def process(metadata, raw_frames_tiff, background_avg_np):
     out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
     out_data = np.empty(out_data_shape,dtype=np.float32)
 
-    frames_batch_np = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+    frames_batch_np = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]), dtype=npo.float32)
     print("Number of frames ({}x{}): ", raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[0], raw_frames_tiff.shape[0])
     print("Output shape: ", out_data_shape)
 
@@ -366,10 +368,18 @@ def process(metadata, raw_frames_tiff, background_avg_np):
     process_batch_vmapf = jax.vmap(f)
     f_all = jax.jit(lambda x, y: process_batch_vmapf(f_cleanframes(x, y)))
 
+    # we schedule the transfer ahead, to enable compute overlap with the disk I/O
+    local_i = ((0 * batch_size) + (rank * local_batch_size))
+    start_hdf5 = timer()
+    for j in range(local_i, local_i  + local_batch_size) : frames_batch_np[j % local_batch_size] = raw_frames_tiff[j][:, :]
+    end_hdf5 = timer()
+    frames_batch = np.array(frames_batch_np)
+
     start = timer()
     for i in range(0, n_batches):
-        start_i = timer()
-        local_i = ((i * batch_size) + (rank * local_batch_size)) 
+        # RangePush("preprocessing")
+        # start_i = timer()
+        
 
         local_range = range(local_i // (metadata['double_exposure']+1) , (local_i  + local_batch_size) // (metadata['double_exposure']+1))
 
@@ -379,33 +389,26 @@ def process(metadata, raw_frames_tiff, background_avg_np):
         i_s = i * local_batch_size // (metadata['double_exposure']+1)
         i_e = i_s + local_batch_size // (metadata['double_exposure']+1)
 
-        RangePush("HDF5 -> NumPy")
-        start_hdf5 = timer()
-        for j in range(local_i, local_i  + local_batch_size) : frames_batch_np[j % local_batch_size] = raw_frames_tiff[j][:, :]
-        end_hdf5 = timer()
-        RangePop()
-        RangePush("NumPy -> JAX")
-        start_HtoD_xfer = timer()
-        frames_batch = np.array(frames_batch_np).block_until_ready()
-        end_HtoD_xfer = timer()
-        RangePop()
-        
         # non-vmap version
-        # process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
-        
-        RangePush("preprocessing")
-        start_jax = timer()
-
-        # TODO: this variable picks up an additional dimension somehow, should fix this...
+        # process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)        
+        # these JAX GPU calls are async, so the will overlap with the Disk I/O in next step (hopefully)
         centered_rescaled_frames_jax = f_all(frames_batch[:-1:2], frames_batch[1::2])
-        out_data = jax.ops.index_update(out_data, jax.ops.index[i_s:i_e, :, :], centered_rescaled_frames_jax[:,0,:,:]).block_until_ready()
-        end_i = timer()
-        if i % 10 == 0:
-            print("i={} ({}s per image, {}s disk, {}s HtoD, {}s jax)".format(i,(end_i-start_i)/local_batch_size,
-                                                                             (end_hdf5-start_hdf5)/local_batch_size,
-                                                                             (end_HtoD_xfer-start_HtoD_xfer)/local_batch_size,
-                                                                             (end_i-start_jax)/local_batch_size))
-        RangePop()
+        
+        if i<n_batches-1:
+            # RangePush("HDF5 -> NumPy")
+            # start_hdf5 = timer()
+            local_i = (((i+1) * batch_size) + (rank * local_batch_size))
+            for j in range(local_i, local_i  + local_batch_size) : frames_batch_np[j % local_batch_size] = raw_frames_tiff[j][:, :]
+            # end_hdf5 = timer()
+            # RangePop()
+            frames_batch = np.array(frames_batch_np)
+
+
+        # TODO: 'centered_rescaled_frames_jax' picks up an additional dimension somehow, should fix this...
+        # Put this at the end, because it is blocking (I think)
+        out_data = jax.ops.index_update(out_data, jax.ops.index[i_s:i_e, :, :], centered_rescaled_frames_jax[:,0,:,:])
+
+        # RangePop()
 
     end = timer()
     print("Total time preprocessing: ", end-start)
