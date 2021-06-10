@@ -18,6 +18,7 @@ import cosmicp.preprocessor as preprocessor
 import IPython
 
 from cosmicp.diskIO import frames_out, map_tiffs
+from cosmicp.preprocessor import prepare_2, process, save_results
 from timeit import default_timer as timer
 
 def convert_translations(translations):
@@ -88,7 +89,7 @@ if __name__ == '__main__':
 
 
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2" #this removes some log messages from jax/tensorflow but apparently it is not working
-    import jax
+    '''import jax
     import cosmicp.preprocessor as preprocessor
 
     metadata = diskIO.read_metadata(options["fname"])
@@ -182,6 +183,45 @@ if __name__ == '__main__':
 
     
     if rank ==0:
-        fid.close()
+        fid.close()'''
+
+
+    import jax
+    import cosmicp.preprocessor as preprocessor
+
+    metadata = diskIO.read_metadata(options["fname"])
+
+    #These do not change
+    metadata["detector_pixel_size"] = 30e-6  # 30 microns
+    metadata["detector_distance"] = 0.121 #this is in meters
+
+    #These here below are options, we can edit them
+    metadata["final_res"] = 3e-9 # desired final pixel size nanometers
+    metadata["desired_padded_input_frame_width"] = None
+    metadata["output_frame_width"] = 256 # final frame width 
+    metadata["translations"] = convert_translations(metadata["translations"])
+    #Energy from eV to Joules
+    #import scipy.constants
+    #metadata["energy"] = metadata["energy"]*scipy.constants.elementary_charge
+
+    n_frames = metadata["translations"].shape[0]
+    n_total_frames = n_frames
+    if metadata["double_exposure"]: n_total_frames *= 2
+
+    dark_frames = diskIO.read_dark_data(metadata, options["fname"])
+
+
+    ##########   
+
+    base_folder = os.path.split(options["fname"])[:-1][0] + "/" 
+    base_folder += os.path.basename(os.path.normpath(metadata["exp_dir"]))
+  
+    ##########
+    raw_frames_tiff = map_tiffs(base_folder)
+
+    metadata, background_avg = prepare_2(metadata, dark_frames, raw_frames_tiff)
+    out_data, my_indexes = process(metadata, raw_frames_tiff, background_avg)
+
+    save_results(options["fname"], metadata, out_data, my_indexes, n_frames)
   
 

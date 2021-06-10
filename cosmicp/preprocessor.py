@@ -314,7 +314,7 @@ def prepare_2(metadata, dark_frames, raw_frames):
     return metadata, background_avg
 
 
-def process(metadata, raw_frames_tiff, background_avg_np):
+def process_jax(metadata, raw_frames_tiff, background_avg_np):
 
     # larger batch size is usually better...
     local_batch_size = 10
@@ -436,6 +436,59 @@ def process_batch(metadata, frames_batch, background_avg, out_data, out_index, k
         out_index += 1 
 
 
+def process(metadata, raw_frames_tiff, background_avg):
+	
+    local_batch_size = 10
+    batch_size = mpi_size * local_batch_size
+
+    n_frames = raw_frames_tiff.shape[0]
+
+    printv(n_frames)
+    
+    if metadata["double_exposure"]:
+        printv("\nProcessing the stack of raw frames - double exposure...\n")
+        n_frames //= 2 # 1/2 for double exposure
+    else:
+        printv("\nProcessing the stack of raw frames...\n")
+
+    #This stores the frames indexes that are being process by this mpi rank
+    my_indexes = []
+    import cosmicp.diskIO as diskIO
+    n_batches = raw_frames_tiff.shape[0] // batch_size
+
+    #Here we correct if the total number of frames is not a multiple of batch_size  
+    extra = raw_frames_tiff.shape[0] - (n_batches * batch_size)
+    print(extra)
+    if rank * local_batch_size < extra: 
+        n_batches = n_batches + 1
+    
+    out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
+    out_data = npo.empty(out_data_shape,dtype=np.float32)
+    frames_batch = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+
+    #Convolution kernel
+    kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
+    kernel_box = np.ones((kernel_width,kernel_width))
+
+    printd(n_batches)
+
+    for i in range(0, n_batches):
+
+        local_i = ((i * batch_size) + (rank * local_batch_size)) 
+
+        local_range = range(local_i // (metadata['double_exposure']+1) , (local_i  + local_batch_size) // (metadata['double_exposure']+1))
+
+        my_indexes.extend(local_range)
+        #if rank == 0: print(my_indexes)
+
+        for j in range(local_i, local_i  + local_batch_size) : frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
+
+        process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
+
+    return out_data, my_indexes
+	
+
+
 def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
     print(len(my_indexes))
@@ -449,7 +502,7 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
         import sys
         import numpy
-        #numpy.set_printoptions(threshold=sys.maxsize)
+        numpy.set_printoptions(threshold=sys.maxsize)
         print(index_gather)
         print(index_gather.shape)
 
