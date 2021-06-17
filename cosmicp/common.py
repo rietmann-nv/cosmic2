@@ -3,6 +3,7 @@ import sys
 import subprocess
 import operator
 import os
+import numpy as np
 
 try: 
     from mpi4py import *
@@ -33,20 +34,52 @@ def printv(string):
     if rank is 0:
         print(string)
 
-def gather(local, shape, dtype):
+def gather(local, out_shape, n_elements, dtype):
 
-    sendbuf = np.array(local)
+    t = None
+
+    if dtype == int or dtype == np.int32:
+        t = MPI.INT
+    if dtype == float or dtype == np.float32:
+        t = MPI.FLOAT
+
+    print(n_elements)
+
+    print(t)
+
+    sendbuf = np.array(local, dtype = dtype)
+
+    #counts = (0,)*size
+   
+    #comm.Allgather(sendbuf=n_elements, recvbuf=counts)
+
+    counts = comm.gather(n_elements)
+
+    print(counts)
+
+    indexes = None
+
+    
+
 
     if rank == 0:
         #print("sendcounts: {}, total: {}".format(sendcounts, sum(sendcounts)))
-        recvbuf = np.empty(shape, dtype)
+
+        #indexes = tuple(i*counts[i-1] for i in range(0, size))
+
+        indexes = np.cumsum([0] + counts[:-1])
+
+        recvbuf = np.empty(out_shape, dtype)
         print(recvbuf.shape)
     else:
         recvbuf = None
 
-    comm.Gatherv(sendbuf=sendbuf, recvbuf=recvbuf)
+    print(indexes)
+
+    comm.Gatherv(sendbuf=sendbuf, recvbuf=[recvbuf, counts, indexes, t])
 
     return recvbuf
+
 
 def igatherv(data_local,chunk_slices, data = None): 
     if size==1: 

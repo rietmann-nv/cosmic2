@@ -294,6 +294,7 @@ def prepare_2(metadata, dark_frames, raw_frames):
 
     n_frames = raw_frames.shape[0]
     n_total_frames = metadata["translations"].shape[0]
+    if metadata["double_exposure"]: n_total_frames *= 2
 
     #This takes the center of the stack as a center frame(s)
     center = int(n_total_frames)//2
@@ -317,7 +318,12 @@ def prepare_2(metadata, dark_frames, raw_frames):
 def process_jax(metadata, raw_frames_tiff, background_avg_np):
 
     # larger batch size is usually better...
-    local_batch_size = 10
+    local_batch_size = 100
+
+    #if the batch size is not even in double exposure we fix that
+    if local_batch_size % 2 != 0 and metadata['double_exposure']:
+        local_batch_size += 1
+
     batch_size = mpi_size * local_batch_size
 
     n_frames = raw_frames_tiff.shape[0]
@@ -437,11 +443,23 @@ def process_batch(metadata, frames_batch, background_avg, out_data, out_index, k
 
 
 def process(metadata, raw_frames_tiff, background_avg):
-	
-    local_batch_size = 10
-    batch_size = mpi_size * local_batch_size
 
-    n_frames = raw_frames_tiff.shape[0]
+    n_total_frames = raw_frames_tiff.shape[0]
+    n_frames = n_total_frames
+
+    local_batch_size = 500
+
+    #if the batch size is not even in double exposure we fix that
+    if local_batch_size % 2 != 0 and metadata['double_exposure']:
+        local_batch_size += 1
+
+    #If the batch size is not given or it is too big, we set it up to give work to every rank
+    if local_batch_size == None or local_batch_size * mpi_size > n_total_frames:
+        local_batch_size = n_total_frames // mpi_size
+        
+    printv("Using local batch size per MPI rank = " + str(local_batch_size))
+
+    batch_size = mpi_size * local_batch_size
 
     printv(n_frames)
     
@@ -459,8 +477,17 @@ def process(metadata, raw_frames_tiff, background_avg):
     #Here we correct if the total number of frames is not a multiple of batch_size  
     extra = raw_frames_tiff.shape[0] - (n_batches * batch_size)
     print(extra)
+    extra_last_batch = None
     if rank * local_batch_size < extra: 
         n_batches = n_batches + 1
+        n_ranks_extra = int(np.ceil(extra/local_batch_size))
+        print(n_ranks_extra)
+        #We always overshot the batch sizes if they don't match perfectly (that is when extra % local_batch_size != 0)
+        #To account for this, we need to have an index substraction (extra_last_batch) for last rank accross the ones having extra work
+        if rank == n_ranks_extra - 1 and extra % local_batch_size != 0: 
+            extra_last_batch = - (local_batch_size - (extra % local_batch_size)) // (metadata['double_exposure']+1)
+
+    printd(extra_last_batch)        
     
     out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
     out_data = npo.empty(out_data_shape,dtype=np.float32)
@@ -476,35 +503,69 @@ def process(metadata, raw_frames_tiff, background_avg):
 
         local_i = ((i * batch_size) + (rank * local_batch_size)) 
 
-        local_range = range(local_i // (metadata['double_exposure']+1) , (local_i  + local_batch_size) // (metadata['double_exposure']+1))
+        #we handle uneven shapes here
+        upper_bound = min(local_i  + local_batch_size, n_total_frames)
+
+        local_range = range(local_i // (metadata['double_exposure']+1) , upper_bound // (metadata['double_exposure']+1))
 
         my_indexes.extend(local_range)
         #if rank == 0: print(my_indexes)
 
-        for j in range(local_i, local_i  + local_batch_size) : frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
+        for j in range(local_i, upper_bound) : 
+            printd(j)
+            frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
 
         process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
 
-    return out_data, my_indexes
+    return out_data[:extra_last_batch], my_indexes
 	
 
 
 def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
     print(len(my_indexes))
-    frames_gather = gather(local_data, (n_frames, local_data[0].shape[0], local_data[0].shape[1]), npo.float32)
+    print(n_frames)
+    printd(local_data.shape)
+    printd(my_indexes)
+    
+
+    #local = np.array([[[(rank + 1)*1, (rank + 1)*2],[(rank + 1)*3, (rank + 1)*4]], [[(rank + 1)*5, (rank + 1)*6],[(rank + 1)*7, (rank + 1)*8]]], dtype='int32')
+
+    #print(local)
+    #print(local.shape)
+
+    #test_gather = gather(local, (4, local[0].shape[0], local[0].shape[1]), npo.int32)
+
+    print("gather-------------------------------")
+
+    n_elements = npo.prod([i for i in local_data.shape])
+
+    frames_gather = gather(local_data, (n_frames, local_data[0].shape[0], local_data[0].shape[1]), n_elements, npo.float32)  
 
     #we need the indexes too to map properly each gathered frame
     print(type(my_indexes[0]))
-    index_gather = gather(my_indexes, n_frames, int)
+    index_gather = gather(my_indexes, n_frames, len(my_indexes), npo.int32)
 
     if rank == 0:
+   
+        #print(test_gather)
+        #print(test_gather.shape)
 
         import sys
         import numpy
         numpy.set_printoptions(threshold=sys.maxsize)
+        print(frames_gather[:,0,0])
         print(index_gather)
         print(index_gather.shape)
+
+        #Here we generate a proper index pull map, with respect to the input
+        index_gather = npo.array([ npo.where(index_gather==i)[0][0] for i in range(0,len(index_gather))])
+
+        print(index_gather)
+
+        frames_gather[:,:,:] = frames_gather[index_gather,:,:]
+
+        print(frames_gather[:,0,0])
 
         print("Output_data size: {}".format(frames_gather.shape))
 
@@ -525,10 +586,8 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
         data_shape = frames_gather.shape
         out_frames, fid = frames_out(output_filename, data_shape)  
 
-        out_frames[:, :, :] = frames_gather[index_gather]
+        out_frames[:, :, :] = frames_gather[:, :, :]
 
-    
-    if rank ==0:
         fid.close()
 
 
