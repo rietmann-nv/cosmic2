@@ -1,53 +1,52 @@
 #!/usr/bin/env python
 
 import sys, getopt
-from cosmicp.common import printv
+from cosmicp.common import printv, color, bcolors
 
 
-help =   "\n\cosmicp.py [options] input.json\n\n\
--g -> \tEnable GPU acceleration, off by default.\n\
+help =   "\nUsage: cosmicp.py [options] input.json\n\n\
+\t -g   -> Perform a GPU execution, off by default.\n\
+\t -b N -> Set local batch size = N, per MPI rank. N = 20 by default.\n\
 \n\n"
 
 def parse_arguments(args, options = None):
 
-    printv("Parsing parameters...")
+    printv(color("\nParsing parameters...\n", bcolors.OKGREEN))
 
     try:
         json_file = args[0]
     except:
-        raise Exception("Must provide an input JSON file")
+        raise Exception(color("\nMust provide an input JSON file\n", bcolors.FAIL))
 
     if options is None:
-        options = {"gpu_accelerated": False, "limit_num_images": None}
+        options = {"gpu_accelerated": False, 
+                   "batch_size_per_rank": 20}
 
     try:
-        opts, args_left = getopt.getopt(args,"hgl:", \
-                              ["gpu_accelerated", "limit_num_images="])
+        opts, args_left = getopt.getopt(args,"hgb:", \
+                              ["gpu_accelerated", "batch_size_per_rank="])
 
     except getopt.GetoptError:
-        printv(help)
+        printv(color(help, bcolors.WARNING))
         sys.exit(2)
 
-    print("opts=", opts)
     for opt, arg in opts:
         if opt == '-h':
             printv(help)
             sys.exit()
         elif opt in ("-g", "--gpu_accelerated"):
             options["gpu_accelerated"] = True
-        if opt in ("-l", "--limit_num_images"):
-            options["limit_num_images"] = int(arg)
+        if opt in ("-b", "--batch_size_per_rank"):
+            options["batch_size_per_rank"] = int(arg)
 
 
-    if len(args_left) is not 1:
+    if len(args_left) != 1:
 
-        printv(help)
+        printv(color(help, bcolors.WARNING))
         sys.exit(2)
 
     else:
         options["fname"] = args_left[0]
-
-    print("options=", options)
     
     return options
 

@@ -23,15 +23,27 @@ else:
     size = 1
     rank = 0
 
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+
+def color(string, c):
+    return c + string + bcolors.ENDC
 
 def printd(string):
     if mpi_enabled:
-        print("MPI Rank " + str(rank) + ": " + str(string))
+        a = color("\r MPI Rank " + str(rank) + ": ", bcolors.HEADER)
+        print(a, end="", flush=True)
+        print(string)
     else: 
         printv(string)
 
 def printv(string):
-    if rank is 0:
+    if rank == 0:
         print(string)
 
 def gather(local, out_shape, n_elements, dtype):
@@ -43,73 +55,46 @@ def gather(local, out_shape, n_elements, dtype):
     if dtype == float or dtype == np.float32:
         t = MPI.FLOAT
 
-    print(n_elements)
-
-    print(t)
-
     sendbuf = np.array(local, dtype = dtype)
-
-    #counts = (0,)*size
-   
-    #comm.Allgather(sendbuf=n_elements, recvbuf=counts)
 
     counts = comm.gather(n_elements)
 
-    print(counts)
-
     indexes = None
 
-    
-
-
     if rank == 0:
-        #print("sendcounts: {}, total: {}".format(sendcounts, sum(sendcounts)))
-
-        #indexes = tuple(i*counts[i-1] for i in range(0, size))
-
         indexes = np.cumsum([0] + counts[:-1])
-
         recvbuf = np.empty(out_shape, dtype)
-        print(recvbuf.shape)
+
     else:
         recvbuf = None
-
-    print(indexes)
 
     comm.Gatherv(sendbuf=sendbuf, recvbuf=[recvbuf, counts, indexes, t])
 
     return recvbuf
 
+def convert_translations(translations):
 
-def igatherv(data_local,chunk_slices, data = None): 
-    if size==1: 
-        if type(data) == type(None):
-            data=data_local+0
-        else:
-            data[...] = data_local[...]
-        return data
+    zeros = np.zeros(translations.shape[0])
 
-    cnt=np.diff(chunk_slices)
-    slice_shape=data_local.shape[1:]
-    sdim=np.prod(slice_shape)
-    
-    if rank==0 and type(data) == type(None) :
-        tshape=(np.append(chunk_slices[-1,-1]-chunk_slices[0,0],slice_shape))
-        data = np.empty(tuple(tshape),dtype=data_local.dtype)
+    new_translations = np.column_stack((translations[:,1]*1e-6,translations[::-1,0]*1e-6, zeros)).astype('float32') 
 
+    return new_translations
 
-    #comm.Gatherv(sendbuf=[data_local, MPI.FLOAT],recvbuf=[data,(cnt*sdim,None),MPI.FLOAT],root=0)
-    
-    # for large messages
-    mpichunktype = MPI.FLOAT.Create_contiguous(4).Commit()
-    #mpics=mpichunktype.Get_size()
-    sdim=sdim* MPI.FLOAT.Get_size()//mpichunktype.Get_size()
-    req=comm.Igatherv(sendbuf=[np.asarray(data_local), mpichunktype],recvbuf=[data,(cnt*sdim,None),mpichunktype])
-    mpichunktype.Free()
-    
-    return req
+def complete_metadata(metadata):
 
-def mpi_allGather(send_buff, recv_buff):
+    #These do not change
+    metadata["detector_pixel_size"] = 30e-6  # 30 microns
+    metadata["detector_distance"] = 0.121 #this is in meters
+
+    #These here below are options, we can edit them
+    metadata["final_res"] = 3e-9 # desired final pixel size nanometers
+    metadata["desired_padded_input_frame_width"] = None
+    metadata["output_frame_width"] = 256 # final frame width 
+    metadata["translations"] = convert_translations(metadata["translations"])
+
+    return metadata
+
+def allgather(send_buff, recv_buff):
 
     global size, rank, mpi_enabled
 
@@ -132,18 +117,18 @@ def set_visible_device(gpu_priority):
 
     cuda_dir_list = []
 
-    cuda_dir_list = mpi_allGather(cuda_dir, cuda_dir_list)
+    cuda_dir_list = allgather(cuda_dir, cuda_dir_list)
 
     #printd(', '.join(str(e) for e in cuda_dir_list))
 
     for i in cuda_dir_list:
-        if i is not "":    
+        if i != "":    
             cuda_dir = i
             break
 
     os.environ['CUDA_PATH'] = cuda_dir
 
-    printd("CUDA directory: " + cuda_dir)
+    printd(color("CUDA directory: " + cuda_dir, bcolors.HEADER))
 
     cmd = "nvidia-smi --query-gpu=index,memory.total,memory.free,memory.used,pstate,utilization.gpu --format=csv"
  
