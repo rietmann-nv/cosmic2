@@ -361,6 +361,17 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
         data_shape = frames_gather.shape
         out_frames, fid = frames_out(output_filename, data_shape)  
 
+        dataAve = frames_gather[()].mean(0)
+        pMask = np.fft.fftshift((dataAve > 0.1 * dataAve.max()))
+        probe = np.sqrt(np.fft.fftshift(dataAve)) * pMask
+        probe = np.fft.ifftshift(np.fft.ifftn(probe))
+        dset = fid.create_dataset('entry_1/instrument_1/detector_1/probe', data = probe)
+        dset = fid.create_dataset('entry_1/instrument_1/detector_1/data_illumination', data = probe)
+        dset = fid.create_dataset('entry_1/instrument_1/source_1/probe', data = probe)
+        dset = fid.create_dataset('entry_1/instrument_1/source_1/data_illumination', data = probe)
+        dset = fid.create_dataset('entry_1/instrument_1/source_1/illumination', data = probe)
+        dset = fid.create_dataset('entry_1/instrument_1/detector_1/probe_mask', data = pMask)
+
         out_frames[:, :, :] = frames_gather[:, :, :]
 
         fid.close()

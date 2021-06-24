@@ -4,6 +4,7 @@ import subprocess
 import operator
 import os
 import numpy as np
+import json
 
 try: 
     from mpi4py import *
@@ -80,16 +81,18 @@ def convert_translations(translations):
 
     return new_translations
 
-def complete_metadata(metadata):
+def complete_metadata(metadata, conf_file):
+
+    defaults = json.loads(open(conf_file).read())
 
     #These do not change
-    metadata["detector_pixel_size"] = 30e-6  # 30 microns
-    metadata["detector_distance"] = 0.121 #this is in meters
+    metadata["detector_pixel_size"] = defaults["geometry"]["psize"] * 1e-6 #30e-6  # 30 microns
+    metadata["detector_distance"] = defaults["geometry"]["distance"] / 1000.  #0.121 #this is in meters
 
     #These here below are options, we can edit them
-    metadata["final_res"] = 3e-9 # desired final pixel size nanometers
+    metadata["final_res"] = defaults["geometry"]["resolution"]  #3e-9 #recon pixel size meters
     metadata["desired_padded_input_frame_width"] = None
-    metadata["output_frame_width"] = 256 # final frame width 
+    metadata["output_frame_width"] = defaults["geometry"]["shape"]  #256 # final frame width 
     metadata["translations"] = convert_translations(metadata["translations"])
 
     return metadata

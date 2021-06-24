@@ -22,6 +22,8 @@ if __name__ == '__main__':
         printv(color("\r Running on CPU, enable -g option for a GPU execution", bcolors.HEADER))
 
 
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false" #This prevents JAX from taking over the whole device memory
+
     os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3" #this removes some log messages from tensorflow that can be pretty annoying
 
     from absl import logging
@@ -40,7 +42,7 @@ if __name__ == '__main__':
 
     metadata = diskIO.read_metadata(options["fname"])
 
-    metadata = complete_metadata(metadata)
+    metadata = complete_metadata(metadata, options["conf_file"])
 
     n_frames = metadata["translations"].shape[0]
 

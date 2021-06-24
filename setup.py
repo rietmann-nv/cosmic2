@@ -59,6 +59,14 @@ EXCLUDE_FROM_PACKAGES = []
 print("Found packages")
 print(find_packages())
 
+CONFIG_PATH = os.path.join(os.path.expanduser('~')) + "/cosmicp_config"
+
+# if the config directory tree doesn't exist, create it
+if not os.path.exists(CONFIG_PATH):
+    os.makedirs(CONFIG_PATH)
+
+shutil.copy('configuration/default.json', CONFIG_PATH)
+
 setup_info = dict(
     name='cosmicp',
     version=VERSION,
