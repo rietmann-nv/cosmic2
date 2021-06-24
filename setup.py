@@ -48,12 +48,6 @@ def read(fname):
     with open(os.path.join(os.path.dirname(__file__), fname)) as f:
         return f.read()
 
-udp_ext = Extension('cosmicp.udpframereader',
-                           sources = ['cosmicp/udpframereader.c'],
-                           extra_compile_args=['-std=c99','-march=native','-O3'],
-                           extra_link_args=['-std=c99','-march=native'])
-
-
 EXCLUDE_FROM_PACKAGES = []
 
 print("Found packages")
@@ -113,7 +107,6 @@ setup_info = dict(
         'Source': 'https://github.com/lbl-camera/cosmic2/'
    },
 
-    ext_modules = [udp_ext],
 
     # Package info
     packages=create_package_list('cosmicp'),
