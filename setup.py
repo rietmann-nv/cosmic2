@@ -2,7 +2,7 @@
 import os
 import shutil
 import sys
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, Extension
 from glob import glob
 
 CURRENT_PYTHON = sys.version_info[:2]
@@ -53,6 +53,14 @@ EXCLUDE_FROM_PACKAGES = []
 print("Found packages")
 print(find_packages())
 
+CONFIG_PATH = os.path.join(os.path.expanduser('~')) + "/cosmicp_config"
+
+# if the config directory tree doesn't exist, create it
+if not os.path.exists(CONFIG_PATH):
+    os.makedirs(CONFIG_PATH)
+
+shutil.copy('configuration/default.json', CONFIG_PATH)
+
 setup_info = dict(
     name='cosmicp',
     version=VERSION,
@@ -66,7 +74,7 @@ setup_info = dict(
     include_package_data=True,
     entry_points={},
 
-    install_requires=['numpy', 'h5py==2.10.0', 'Pillow', 'scipy', 'tifffile', 'mpi4py'],
+    install_requires=['numpy', 'h5py==2.10.0', 'Pillow', 'scipy', 'tifffile', 'mpi4py', 'pyzmq'],
 
     extras_require={
         "cupy": ["cupy"],
@@ -98,6 +106,7 @@ setup_info = dict(
     project_urls={
         'Source': 'https://github.com/lbl-camera/cosmic2/'
    },
+
 
     # Package info
     packages=create_package_list('cosmicp'),

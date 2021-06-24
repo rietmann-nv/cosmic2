@@ -1,0 +1,23 @@
+Bootstrap: localimage
+#Change here the proper name for the dependencies container you want to build your image from
+From: ./deps_cuda112.simg
+
+%post
+    cd /opt
+    pip3 install --upgrade setuptools pip
+    pip3 install nvidia-pyindex
+    pip3 install nvidia-cudnn
+    pip3 install --upgrade jax jaxlib==0.1.67+cuda111 -f https://storage.googleapis.com/jax-releases/jax_releases.html
+    pip3 install --upgrade --force-reinstall .
+
+%environment
+    export PATH=${PATH}:/usr/local/cuda/bin    
+    export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/cuda/lib64
+    export LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib/python3.8/dist-packages/nvidia/cudnn/lib
+
+%files
+    ../setup.py /opt/
+    ../cosmicp /opt/
+    ../configuration /opt/
+
+%runscript

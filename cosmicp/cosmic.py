@@ -1,153 +1,64 @@
 #!/usr/bin/env python
 
-import numpy as np
-from cosmicp.common import rank, size, mpi_enabled, check_cupy_available, printd, printv
 import sys
 import os
-import cosmicp.diskIO as diskIO
-
-import cosmicp.preprocessor as preprocessor
-
-from cosmicp.diskIO import frames_out, map_tiffs
-
-
-def convert_translations(translations):
-
-    zeros = np.zeros(translations.shape[0])
-
-    new_translations = np.column_stack((translations[:,1]*1e-6,translations[::-1,0]*1e-6, zeros)) 
-
-    return new_translations
-
-#if True:
-#    json_file = '/fastdata/NS/Fe/200315003/200315003_002_info.json'
-json_file = '/tomodata/NS/200220033/200220033_026_info.json'
+from cosmicp.options import parse_arguments
+from cosmicp.common import rank, size, mpi_enabled, printd, printv, set_visible_device, complete_metadata, color, bcolors
 
 if __name__ == '__main__':
     args = sys.argv[1:]
-    try:
-        json_file = args[0]
-    except:
-        pass
 
-    options = {"debug": True,
-               "gpu_accelerated": False}
+    options = parse_arguments(args)
 
-    gpu_available = check_cupy_available()
+    if options["gpu_accelerated"]:
+        device_order, visible_devices, n_gpus = set_visible_device(rank)
 
-    if not mpi_enabled:
-        printd("\nWARNING: mpi4py is not installed. MPI communication and partition won't be performed.\n" + \
-               "Verify mpi4py is properly installed if you want to enable MPI communication.\n")
+        printd(color("Number of GPUs on this host = " + str(n_gpus), bcolors.HEADER))
+        printd(color("GPU devices occupancy order: " + str(device_order), bcolors.HEADER))
+        printd(color("GPU visible devices for this process = " + str(visible_devices), bcolors.HEADER))
 
-    if not gpu_available and options["gpu_accelerated"]:
-        printd("\nWARNING: GPU mode was selected, but CuPy is not installed.\n" + \
-               "Verify CuPy is properly installed to enable GPU acceleration.\n" + \
-               "Switching to CPU mode...\n")
-
-        options["gpu_accelerated"] = False
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        printv(color("\r Running on CPU, enable -g option for a GPU execution", bcolors.HEADER))
 
 
- 
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false" #This prevents JAX from taking over the whole device memory
 
-    metadata = diskIO.read_metadata(json_file)
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3" #this removes some log messages from tensorflow that can be pretty annoying
 
-    #These do not change
-    metadata["detector_pixel_size"] = 30e-6  # 30 microns
-    metadata["detector_distance"] = 0.121 #this is in meters
-
-    #These here below are options, we can edit them
-    metadata["final_res"] = 3e-9 # desired final pixel size nanometers
-    metadata["desired_padded_input_frame_width"] = None
-    metadata["output_frame_width"] = 256 # final frame width 
-    metadata["translations"] = convert_translations(metadata["translations"])
-    #Energy from eV to Joules
-    #import scipy.constants
-    #metadata["energy"] = metadata["energy"]*scipy.constants.elementary_charge
+    from absl import logging
+    logging.set_verbosity(logging.ERROR) #This does removes some annoying warnings from JAX
 
 
+    import numpy as onp
+    import jax.numpy as np
+    import jax
+    import cosmicp.diskIO as diskIO
+    import cosmicp.preprocessor as preprocessor
 
-    n_total_frames = metadata["translations"].shape[0]
-    if metadata["double_exposure"]: n_total_frames *= 2
+    from cosmicp.diskIO import frames_out, map_tiffs
+    from cosmicp.preprocessor import prepare, process, save_results
+    from timeit import default_timer as timer
 
-    dark_frames = diskIO.read_dark_data(metadata, json_file)
+    metadata = diskIO.read_metadata(options["fname"])
+
+    metadata = complete_metadata(metadata, options["conf_file"])
+
+    n_frames = metadata["translations"].shape[0]
+
+    dark_frames = diskIO.read_dark_data(metadata, options["fname"])
 
     ##########   
 
-    base_folder = os.path.split(json_file)[:-1][0] + "/" 
+    base_folder = os.path.split(options["fname"])[:-1][0] + "/" 
     base_folder += os.path.basename(os.path.normpath(metadata["exp_dir"]))
   
     ##########
-    raw_frames = map_tiffs(base_folder)
+    raw_frames_tiff = map_tiffs(base_folder)
 
-    n_frames = raw_frames.shape[0]
+    metadata, background_avg = prepare(metadata, dark_frames, raw_frames_tiff)
+    out_data, my_indexes = process(metadata, raw_frames_tiff, background_avg, options["batch_size_per_rank"])
 
-    #This takes the center of a chunk as a center frame(s)
-    #center = np.int(n_frames)//2
-    #This takes the center of the stack as a center frame(s)
-    center = np.int(n_total_frames)//2
-
-    #Check this in case we are in double exposure
-    if center % 2 == 1:
-        center -= 1
-
-    if metadata["double_exposure"]:
-        metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
-        center_frames = np.array([raw_frames[center], raw_frames[center + 1]])
-    else:
-        center_frames = raw_frames[center]
-    
-    
-    #print('energy (eV)',metadata['energy'])
-    metadata, background_avg =  preprocessor.prepare(metadata, center_frames, dark_frames)
-    #print('energy (J)',metadata['energy'])
-    #we take the center of mass from rank 0
-    #metadata["center_of_mass"] = mpi_Bcast(metadata["center_of_mass"], metadata["center_of_mass"], 0, mode = "cpu")
-
-
-    io = diskIO.IO()
-    output_filename = os.path.splitext(json_file)[:-1][0][:-4] + "cosmic2.cxi"
-    
-    if rank == 0:
-
-        #output_filename = os.path.splitext(json_file)[:-1][0] + "_cosmic2.cxi"
-
-        printv("\nSaving cxi file metadata: " + output_filename + "\n")
-
-        #data_dictionary["data"] = np.concatenate(data_dictionary["data"], axis=0)
-
-        #This script deletes and rewrites a previous file with the same name
-        try:
-            os.remove(output_filename)
-        except OSError:
-            pass
-
-        #import time
-        #print('hello')
-        #time.sleep(10)
-
-        io.write(output_filename, metadata, data_format = io.metadataFormat) #We generate a new cxi with the new data
-        #io.write(output_filename, data_dictionary, data_format = io.dataFormat) #We use the metadata we read above and drop it into the new cxi
-
-
-    data_shape = (n_frames//(metadata['double_exposure']+1), metadata["output_frame_width"], metadata["output_frame_width"])
-    if rank == 0:
-        out_frames, fid = frames_out(output_filename, data_shape)  
-    else:
-        out_frames = 0
-    
-    #printv('processing stacks')    
-    #my_indexes = calculate_mpi_chunk(n_total_frames, rank, size)
-
-    output_data = preprocessor.process_stack1(metadata,raw_frames,background_avg, out_frames)
-    if rank ==0:
-        fid.close()
-    
-    #output_data = preprocessor.process_stack(metadata, raw_frames, background_avg)
-
-    #data_dictionary = {}
-    #data_dictionary.update({"data" : output_data})
-
-
-    #we gather all results into rank 0
-    #data_dictionary["data"] = mpi_Gather(data_dictionary["data"], data_dictionary["data"], 0, mode = "cpu")
+    save_results(options["fname"], metadata, out_data, my_indexes, n_frames)
+  
 
