@@ -1,0 +1,43 @@
+{
+  "process": {
+    "precount": 0, 
+    "crop": 960, 
+    "gap": 70, 
+    "do_overscan": true, 
+    "threshold": 2000, 
+    "do_spike_removal": true, 
+    "scols": 192,
+    "adu_per_ev" : 0.004,
+    "adu_offset" : 0.35
+  }, 
+  "geometry": {
+    "distance": 121.0, 
+    "zp_outer_width": 0.045, 
+    "energy": 781, 
+    "psize": 30, 
+    "shape": 256, 
+    "zp_diameter": 360.0, 
+    "resolution":10e-9,
+    "rebin": 1
+  }, 
+  "post": {
+    "defocus": 0.0, 
+    "probe_threshold": 0.1, 
+    "truncate": false, 
+    "low_pass": 0.3, 
+    "noise_level": 0.0,
+    "orientation": 7
+  }, 
+  "scan": {
+    "dark_num_total": 0, 
+    "double_exposure": false, 
+    "number": null, 
+    "exp_num_total": 0, 
+    "dark_dir": null, 
+    "date": null, 
+    "dwell": null, 
+    "exp_dir": null, 
+    "repetition": 1, 
+    "id": null
+  }
+}
