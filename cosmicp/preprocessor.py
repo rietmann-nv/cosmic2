@@ -1,7 +1,6 @@
 import sys
 import os
 import jax.numpy as np
-import cupy as cp
 import jax
 import jax.ops
 import jax.dlpack
@@ -17,7 +16,6 @@ from .common import  size as mpi_size
 from .diskIO import IO, frames_out
 
 from timeit import default_timer as timer
-from cupy.cuda.nvtx import RangePush, RangePop
 
 
 @jax.jit
