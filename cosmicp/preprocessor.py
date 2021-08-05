@@ -174,77 +174,12 @@ def prepare(metadata, dark_frames, raw_frames):
     return metadata, background_avg
 
 
-def process_batch(metadata, frames_batch, background_avg, out_data, out_index, kernel_box, local_batch_size):
-
-
-    for i in range(0, local_batch_size, metadata['double_exposure']+1):       
-        
-        if metadata["double_exposure"]:
-            clean_frame = combine_double_exposure(cleanXraw(frames_batch[i]-background_avg[0]), \
-                                                  cleanXraw(frames_batch[i+1]-background_avg[1]), metadata["double_exp_time_ratio"])           
-        else:
-            clean_frame = cleanXraw(frames_batch[i]-background_avg)
-          
-        filtered_frame = filter_frame(clean_frame, kernel_box)
-
-        centered_rescaled_frame = shift_rescale(filtered_frame, metadata["center_of_mass"], metadata["output_frame_width"], metadata["output_padded_ratio"])
-
-        out_data[out_index] = centered_rescaled_frame
-
-        out_index += 1 
-
-
-def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
-
-    n_total_frames = raw_frames_tiff.shape[0]
-    n_frames = n_total_frames
-
-    #if the batch size is not even in double exposure we fix that
-    if local_batch_size % 2 != 0 and metadata['double_exposure']:
-        local_batch_size += 1
-
-    #If the batch size is not given or it is too big, we set it up to give work to every rank
-    if local_batch_size == None or local_batch_size * mpi_size > n_total_frames:
-        local_batch_size = n_total_frames // mpi_size
-
-    batch_size = mpi_size * local_batch_size
-    
-    if metadata["double_exposure"]:
-        printv(color("\nProcessing the stack of raw frames as a double exposure scan...\n", bcolors.OKGREEN))
-        n_frames //= 2 # 1/2 for double exposure
-    else:
-        printv(color("\nProcessing the stack of raw frames as a single exposure scan...\n", bcolors.OKGREEN))
-
-    printv(color("\r Processing a stack of frames of size: {}".format((raw_frames_tiff.shape[0], raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1])), bcolors.HEADER))
-    printv(color("\r Using a local batch size per MPI rank = " + str(local_batch_size), bcolors.HEADER))
-
-    #This stores the frames indexes that are being process by this mpi rank
-    my_indexes = []
-    import cosmicp.diskIO as diskIO
-    n_batches = raw_frames_tiff.shape[0] // batch_size
-
-    #Here we correct if the total number of frames is not a multiple of batch_size  
-    extra = raw_frames_tiff.shape[0] - (n_batches * batch_size)
-
-    extra_last_batch = None
-    if rank * local_batch_size < extra: 
-        n_batches = n_batches + 1
-        n_ranks_extra = int(np.ceil(extra/local_batch_size))
-        #We always overshot the batch sizes if they don't match perfectly (that is when extra % local_batch_size != 0)
-        #To account for this, we need to have an index substraction (extra_last_batch) for last rank accross the ones having extra work
-        if rank == n_ranks_extra - 1 and extra % local_batch_size != 0: 
-            extra_last_batch = - (local_batch_size - (extra % local_batch_size)) // (metadata['double_exposure']+1)     
-    
-    out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
-    out_data = np.empty(out_data_shape,dtype=np.float32)
-    frames_batch = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+def prepare_filter_functions(metadata, background_avg):
 
     #Convolution kernel
     kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
     kernel_box = np.ones((kernel_width,kernel_width))
 
-#---------------------------------------------
-    
     cleanXraw_vmap = jax.vmap(lambda x: cleanXraw(x - background_avg))
     cleanXraw_vmap_d1 = jax.vmap(lambda x: cleanXraw(x - background_avg[0]))
     cleanXraw_vmap_d2 = jax.vmap(lambda x: cleanXraw(x - background_avg[1]))
@@ -265,6 +200,152 @@ def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
     f_all = jax.jit(lambda x: process_batch_vmapf(f_cleanframes(x)))
     f_all_d = jax.jit(lambda x, y: process_batch_vmapf(f_cleanframes_d(x, y)))
 
+    return f_all, f_all_d
+
+
+def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
+
+
+    if metadata["double_exposure"]:
+        printv(color("\nProcessing the stack of raw frames as a double exposure scan...\n", bcolors.OKGREEN))
+    else:
+        printv(color("\nProcessing the stack of raw frames as a single exposure scan...\n", bcolors.OKGREEN))
+
+    printv(color("\r Processing a stack of frames of size: {}".format((raw_frames_tiff.shape[0], raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1])), bcolors.HEADER))
+
+    filter_all, filter_all_dexp = prepare_filter_functions(metadata, background_avg)
+
+    if metadata["input_address"] != None:
+        process_socket(metadata, filter_all, filter_all_dexp)
+    else:
+        results =  process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filter_all_dexp)
+
+    return results
+
+
+def process_socket(metadata, filter_all, filter_all_dexp):
+
+    buffer_size = 6 #How many frames are stored before sending them to a worker, make it even for double exposure
+
+    output_index = 0
+    batch = 1
+
+    #We don't know the shape of the output data per rank so we allocate only the buffer_size, we keep resizing it with each new batch we get
+    out_data_shape = (buffer_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
+    out_data = np.empty(out_data_shape,dtype=np.float32)
+
+    if rank == 0:
+
+        addr = 'tcp://%s' % metadata["input_address"]
+        context = zmq.Context()
+
+        input_socket = context.socket(zmq.SUB)
+        input_socket.setsockopt(zmq.SUBSCRIBE, b'')
+        input_socket.set_hwm(2000)
+        input_socket.connect(addr)
+
+        frames_buffer = []
+        index_buffer = []
+
+        next_worker = 1
+
+        while True: 
+
+            number, frame = frame_socket.recv_multipart()  # blocking
+
+            if number == None: #A None number means processing is over
+                for i in range(1, mpi_size):
+                    print("Ending worker " + str(i))
+                    comm.send(None, dest=i)
+                    comm.send(None, dest=i)
+                break 
+
+            frames_buffer.append(frame)
+            index_buffer.append(index)
+
+            if len(frames_buffer) == buffer_size:
+
+                comm.send(frames_buffer, dest=next_worker)
+                comm.send(index_buffer, dest=next_worker)
+
+                frames_buffer = []
+                index_buffer = []
+                
+                next_worker =  ((next_worker + 1) % mpi_size) + 1             
+
+        input_socket.disconnect(addr)
+
+    else:
+
+        while True: 
+
+            n_batches = 1
+
+            frames_batch = comm.recv(source=0)
+            indexes = comm.recv(source=0)
+
+            if batch == None: break #A None batch means processing is over
+
+            n_frames_out = frames_batch.shape[0] // (metadata['double_exposure']+1)
+
+            my_indexes.extend(indexes)
+
+            if metadata["double_exposure"]:
+                centered_rescaled_frames_jax = filter_all_dexp(frames_batch[:-1:2], frames_batch[1::2])
+            else:
+                centered_rescaled_frames_jax = filter_all(frames_batch)
+
+            # TODO: 'centered_rescaled_frames_jax' picks up an additional dimension somehow, should fix this...
+            out_data = jax.ops.index_update(out_data, jax.ops.index[output_index:output_index + n_frames_out, :, :], centered_rescaled_frames_jax[:,0,:,:])
+
+            output_index += n_frames_out
+            n_batches += 1
+
+            if rank == 1:
+                sys.stdout.write(color("\r Computing batch = %s of %s frames" %(n_batches, n_frames_out), bcolors.HEADER))
+                sys.stdout.flush()
+
+        if rank == 1: print("\n")
+
+    return out_data, my_indexes
+
+
+def process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filter_all_dexp):
+
+    n_total_frames = raw_frames_tiff.shape[0]
+
+    #if the batch size is not even in double exposure we fix that
+    if local_batch_size % 2 != 0 and metadata['double_exposure']:
+        local_batch_size += 1
+
+    #If the batch size is not given or it is too big, we set it up to give work to every rank
+    if local_batch_size == None or local_batch_size * mpi_size > n_total_frames:
+        local_batch_size = n_total_frames // mpi_size
+
+    batch_size = mpi_size * local_batch_size
+
+    printv(color("\r Using a local batch size per MPI rank = " + str(local_batch_size), bcolors.HEADER))
+
+    #This stores the frames indexes that are being process by this mpi rank
+    my_indexes = []
+    n_batches = raw_frames_tiff.shape[0] // batch_size
+
+    #Here we correct if the total number of frames is not a multiple of batch_size  
+    extra = raw_frames_tiff.shape[0] - (n_batches * batch_size)
+
+    extra_last_batch = None
+    if rank * local_batch_size < extra: 
+        n_batches = n_batches + 1
+        n_ranks_extra = int(np.ceil(extra/local_batch_size))
+        #We always overshot the batch sizes if they don't match perfectly (that is when extra % local_batch_size != 0)
+        #To account for this, we need to have an index substraction (extra_last_batch) for last rank accross the ones having extra work
+        if rank == n_ranks_extra - 1 and extra % local_batch_size != 0: 
+            extra_last_batch = - (local_batch_size - (extra % local_batch_size)) // (metadata['double_exposure']+1)     
+    
+    out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
+    out_data = np.empty(out_data_shape,dtype=np.float32)
+    frames_batch = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+
     for i in range(0, n_batches):
 
         local_i = ((i * batch_size) + (rank * local_batch_size)) 
@@ -283,9 +364,9 @@ def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
             frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
 
         if metadata["double_exposure"]:
-            centered_rescaled_frames_jax = f_all_d(frames_batch[:-1:2], frames_batch[1::2])
+            centered_rescaled_frames_jax = filter_all_dexp(frames_batch[:-1:2], frames_batch[1::2])
         else:
-            centered_rescaled_frames_jax = f_all(frames_batch)
+            centered_rescaled_frames_jax = filter_all(frames_batch)
 
         # TODO: 'centered_rescaled_frames_jax' picks up an additional dimension somehow, should fix this...
         out_data = jax.ops.index_update(out_data, jax.ops.index[i_s:i_e, :, :], centered_rescaled_frames_jax[:,0,:,:])
@@ -296,33 +377,6 @@ def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
 
     if rank == 0: print("\n")
     return out_data[:extra_last_batch], my_indexes
-
-
-#------------------------
-#This is the baseline no-vmap version of the above, slightly slower
-    '''
-    printd(n_batches)
-
-    for i in range(0, n_batches):
-
-        local_i = ((i * batch_size) + (rank * local_batch_size)) 
-
-        #we handle uneven shapes here
-        upper_bound = min(local_i  + local_batch_size, n_total_frames)
-
-        local_range = range(local_i // (metadata['double_exposure']+1) , upper_bound // (metadata['double_exposure']+1))
-
-        my_indexes.extend(local_range)
-        #if rank == 0: print(my_indexes)
-
-        for j in range(local_i, upper_bound) : 
-            printd(j)
-            frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
-
-        process_batch(metadata, frames_batch, background_avg, out_data, i * local_batch_size // (metadata['double_exposure']+1), kernel_box, local_batch_size)
-
-    return out_data[:extra_last_batch], my_indexes
-'''
 
 
 def save_results(fname, metadata, local_data, my_indexes, n_frames):
