@@ -10,6 +10,7 @@ import scipy.interpolate
 import scipy.signal
 import numpy as npo
 import math
+from .nexus_io import write, nexus_metadata, nexus_data, cosmic_metadata
 from .fccd import imgXraw as cleanXraw
 from .common import printd, printv, rank, gather, color, bcolors
 from .common import  size as mpi_size
@@ -215,7 +216,7 @@ def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
 
     filter_all, filter_all_dexp = prepare_filter_functions(metadata, background_avg)
 
-    if metadata["input_address"] != None:
+    if "input_address" in metadata and metadata["input_address"] != None:
         process_socket(metadata, filter_all, filter_all_dexp)
     else:
         results =  process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filter_all_dexp)
@@ -381,6 +382,8 @@ def process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filte
 
 def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
+    nexus_file = cxi_file = True
+
     n_elements = npo.prod([i for i in local_data.shape])
 
     frames_gather = gather(local_data, (n_frames, local_data[0].shape[0], local_data[0].shape[1]), n_elements, npo.float32)  
@@ -397,36 +400,66 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
         printv(color("\r Final output data size: {}".format(frames_gather.shape), bcolors.HEADER))
 
-        io = IO()
-        output_filename = os.path.splitext(fname)[:-1][0][:-4] + "cosmic2.cxi"
-
-        printv(color("\nSaving cxi file: " + output_filename + "\n", bcolors.OKGREEN))
-
-        #This deletes and rewrites a previous file with the same name
-        try:
-            os.remove(output_filename)
-        except OSError:
-            pass
-
-        io.write(output_filename, metadata, data_format = io.metadataFormat) #We generate a new cxi with the new data
-
-        data_shape = frames_gather.shape
-        out_frames, fid = frames_out(output_filename, data_shape)  
-
         dataAve = frames_gather[()].mean(0)
         pMask = np.fft.fftshift((dataAve > 0.1 * dataAve.max()))
         probe = np.sqrt(np.fft.fftshift(dataAve)) * pMask
         probe = np.fft.ifftshift(np.fft.ifftn(probe))
-        dset = fid.create_dataset('entry_1/instrument_1/detector_1/probe', data = probe)
-        dset = fid.create_dataset('entry_1/instrument_1/detector_1/data_illumination', data = probe)
-        dset = fid.create_dataset('entry_1/instrument_1/source_1/probe', data = probe)
-        dset = fid.create_dataset('entry_1/instrument_1/source_1/data_illumination', data = probe)
-        dset = fid.create_dataset('entry_1/instrument_1/source_1/illumination', data = probe)
-        dset = fid.create_dataset('entry_1/instrument_1/detector_1/probe_mask', data = pMask)
 
-        out_frames[:, :, :] = frames_gather[:, :, :]
+        output_filename = os.path.splitext(fname)[:-1][0][:-5]
 
-        fid.close()
+        if cxi_file:
+
+            io = IO()
+            cxi_filename = output_filename + "_cosmic2.cxi"
+
+            printv(color("\nSaving cxi file: " + cxi_filename + "\n", bcolors.OKGREEN))
+
+            #This deletes and rewrites a previous file with the same name
+            try:
+                os.remove(cxi_filename)
+            except OSError:
+                pass
+
+            io.write(cxi_filename, metadata, data_format = io.metadataFormat) #We generate a new cxi with the new data
+
+            data_shape = frames_gather.shape
+            out_frames, fid = frames_out(cxi_filename, data_shape)  
+
+
+            dset = fid.create_dataset('entry_1/instrument_1/detector_1/probe', data = probe)
+            dset = fid.create_dataset('entry_1/instrument_1/detector_1/data_illumination', data = probe)
+            dset = fid.create_dataset('entry_1/instrument_1/source_1/probe', data = probe)
+            dset = fid.create_dataset('entry_1/instrument_1/source_1/data_illumination', data = probe)
+            dset = fid.create_dataset('entry_1/instrument_1/source_1/illumination', data = probe)
+            dset = fid.create_dataset('entry_1/instrument_1/detector_1/probe_mask', data = pMask)
+
+            out_frames[:, :, :] = frames_gather[:, :, :]
+
+            fid.close()
+
+        if nexus_file:
+
+            nexus_filename = output_filename + ".nex"
+
+            printv(color("\nSaving nexus file: " + nexus_filename + "\n", bcolors.OKGREEN))
+
+            #This deletes and rewrites a previous file with the same name
+            try:
+                os.remove(nexus_filename)
+            except OSError:
+                pass
+
+            print(metadata)
+
+            metadata["x_translations"] = metadata["translations"][:,0]
+            metadata["y_translations"] = metadata["translations"][:,1]
+            metadata["z_translations"] = metadata["translations"][:,2]
+
+            data_format = nexus_data
+            #writing data
+            write(nexus_filename, {"data": frames_gather}, data_format = nexus_data)
+            #writing metadata
+            write(nexus_filename, metadata, data_format = {**nexus_metadata, **cosmic_metadata})
 
 
         
