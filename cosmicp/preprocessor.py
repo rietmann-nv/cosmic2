@@ -204,7 +204,7 @@ def prepare_filter_functions(metadata, background_avg):
     return f_all, f_all_d
 
 
-def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
+def process(metadata, raw_frames, background_avg, local_batch_size):
 
 
     if metadata["double_exposure"]:
@@ -212,14 +212,14 @@ def process(metadata, raw_frames_tiff, background_avg, local_batch_size):
     else:
         printv(color("\nProcessing the stack of raw frames as a single exposure scan...\n", bcolors.OKGREEN))
 
-    printv(color("\r Processing a stack of frames of size: {}".format((raw_frames_tiff.shape[0], raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1])), bcolors.HEADER))
+    printv(color("\r Processing a stack of frames of size: {}".format((raw_frames.shape[0], raw_frames[0].shape[0], raw_frames[0].shape[1])), bcolors.HEADER))
 
     filter_all, filter_all_dexp = prepare_filter_functions(metadata, background_avg)
 
     if "input_address" in metadata and metadata["input_address"] != None:
         process_socket(metadata, filter_all, filter_all_dexp)
     else:
-        results =  process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filter_all_dexp)
+        results =  process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all_dexp)
 
     return results
 
@@ -311,9 +311,9 @@ def process_socket(metadata, filter_all, filter_all_dexp):
     return out_data, my_indexes
 
 
-def process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filter_all_dexp):
+def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all_dexp):
 
-    n_total_frames = raw_frames_tiff.shape[0]
+    n_total_frames = raw_frames.shape[0]
 
     #if the batch size is not even in double exposure we fix that
     if local_batch_size % 2 != 0 and metadata['double_exposure']:
@@ -329,10 +329,10 @@ def process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filte
 
     #This stores the frames indexes that are being process by this mpi rank
     my_indexes = []
-    n_batches = raw_frames_tiff.shape[0] // batch_size
+    n_batches = raw_frames.shape[0] // batch_size
 
     #Here we correct if the total number of frames is not a multiple of batch_size  
-    extra = raw_frames_tiff.shape[0] - (n_batches * batch_size)
+    extra = raw_frames.shape[0] - (n_batches * batch_size)
 
     extra_last_batch = None
     if rank * local_batch_size < extra: 
@@ -345,7 +345,7 @@ def process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filte
     
     out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
     out_data = np.empty(out_data_shape,dtype=np.float32)
-    frames_batch = npo.empty((local_batch_size, raw_frames_tiff[0].shape[0], raw_frames_tiff[0].shape[1]))
+    frames_batch = npo.empty((local_batch_size, raw_frames[0].shape[0], raw_frames[0].shape[1]))
 
     for i in range(0, n_batches):
 
@@ -362,7 +362,7 @@ def process_batch(metadata, raw_frames_tiff, local_batch_size, filter_all, filte
         i_e = i_s + local_batch_size // (metadata['double_exposure']+1)
 
         for j in range(local_i, upper_bound) : 
-            frames_batch[j % local_batch_size] = raw_frames_tiff[j][:, :]
+            frames_batch[j % local_batch_size] = raw_frames[j][:, :]
 
         if metadata["double_exposure"]:
             centered_rescaled_frames_jax = filter_all_dexp(frames_batch[:-1:2], frames_batch[1::2])

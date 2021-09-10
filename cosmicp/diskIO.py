@@ -7,6 +7,13 @@ from PIL import Image
 from .common import printd, printv, color, bcolors
 
 
+def read_metadata_hdf5(fname):
+
+    with h5py.File(fname, "r") as f:
+
+        return json.load(f["metadata/"])
+
+
 def read_metadata(json_file):
 
     with open(json_file) as f:
@@ -66,6 +73,12 @@ def read_tiffs(directory, my_indexes = None):
         
     if rank == 0: print("\n")
     return np.array(frames)
+
+def read_hdf5_group(fname, group = "entry_1/data_1/exp_frames"):
+
+    with h5py.File(fname, "r") as f:
+
+        return f[group]
 
 def frames_out(file_name, shape_frames):
     import h5py
