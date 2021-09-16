@@ -2,7 +2,8 @@
 import os
 import shutil
 import sys
-from setuptools import setup, find_packages, Extension
+from setuptools import find_packages, Extension
+from skbuild import setup
 from glob import glob
 
 CURRENT_PYTHON = sys.version_info[:2]
@@ -48,10 +49,10 @@ def read(fname):
     with open(os.path.join(os.path.dirname(__file__), fname)) as f:
         return f.read()
 
-udp_ext = Extension('cosmicp.udpframereader',
-                           sources = ['cosmicp/udpframereader.c'],
-                           extra_compile_args=['-std=c99','-march=native','-O3'],
-                           extra_link_args=['-std=c99','-march=native'])
+# udp_ext = Extension('cosmicp.udpframereader',
+#                            sources = ['cosmicp/udpframereader.c'],
+#                            extra_compile_args=['-std=c99','-march=native','-O3'],
+#                            extra_link_args=['-std=c99','-march=native'])
 
 
 EXCLUDE_FROM_PACKAGES = []
@@ -105,11 +106,11 @@ setup_info = dict(
         'Source': 'https://github.com/lbl-camera/cosmic2/'
    },
 
-    ext_modules = [udp_ext],
+    # ext_modules = [udp_ext],
 
     # Package info
     packages=create_package_list('cosmicp'),
-
+    
     # Add _ prefix to the names of temporary build dirs
     options={
         'build': {'build_base': '_build'}
