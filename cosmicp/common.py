@@ -93,7 +93,8 @@ def complete_metadata(metadata, conf_file):
     metadata["final_res"] = defaults["geometry"]["resolution"]  #3e-9 #recon pixel size meters
     metadata["desired_padded_input_frame_width"] = None
     metadata["output_frame_width"] = defaults["geometry"]["shape"]  #256 # final frame width 
-    metadata["translations"] = convert_translations(metadata["translations"])
+    metadata["translations"] = convert_translations(np.array(metadata["translations"]))
+    metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
 
     return metadata
 

@@ -10,9 +10,11 @@ import scipy.interpolate
 import scipy.signal
 import numpy as npo
 import math
+import zmq
+import json
 from .nexus_io import write, nexus_metadata, nexus_data, cosmic_metadata
 from .fccd import imgXraw as cleanXraw
-from .common import printd, printv, rank, gather, color, bcolors
+from .common import printd, printv, rank, gather, color, bcolors, comm
 from .common import  size as mpi_size
 from .diskIO import IO, frames_out
 
@@ -138,7 +140,51 @@ def compute_background_metadata(metadata, frames, dark_frames):
     return metadata, background_avg
 
 
-def prepare(metadata, dark_frames, raw_frames):
+def subscribe_to_socket(network_metadata):
+
+    addr = 'tcp://%s' % network_metadata["input_address"]
+
+    input_socket = network_metadata["context"].socket(zmq.SUB)
+    input_socket.setsockopt(zmq.SUBSCRIBE, b'')
+    input_socket.set_hwm(2000)
+    input_socket.connect(addr)
+
+    return input_socket
+
+def receive_metadata(network_metadata):
+
+    print("Waiting for metadata...")
+    metadata = json.loads(network_metadata["input_socket"].recv_string())  # blocking
+    print("Received metadata ")
+    print(metadata)
+
+    return metadata
+
+
+def receive_n_frames(n_frames, network_metadata):
+
+    frames = []
+
+    n_received = 0
+
+    while n_received < n_frames: 
+
+        number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
+        print("Received frame " + str(number))
+
+        frames.append(frame)
+        n_received += 1           
+
+    return frames
+
+def deserialize_buffer(buf, t = npo.uint16, shape = (512, 512)):
+
+    for i in range(0, len(buf)):
+        buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
+
+    return buf
+
+def prepare_from_mem(metadata, dark_frames, raw_frames):
 
     dark_frames = np.array(dark_frames)
 
@@ -157,22 +203,51 @@ def prepare(metadata, dark_frames, raw_frames):
 
     center_frames = []
     if metadata["double_exposure"]:
-        metadata["double_exp_time_ratio"] = metadata["dwell1"] // metadata["dwell2"] # time ratio between long and short exposure
-        
         for i in range(center, center + extra_frames + 1, 2):
             center_frames.append(raw_frames[i])
             center_frames.append(raw_frames[i + 1])
-
     else:
-
         for i in range(center, center + extra_frames + 1, 1):
             center_frames.append(raw_frames[i])
 
     center_frames = np.array(center_frames)
+
+    return metadata, center_frames, dark_frames
+
+
+def prepare_from_socket(metadata, network_metadata):
+
+    #The raw frames shape will be sent before the dark frames
+    metadata["raw_frame_shape"] = receive_metadata(network_metadata)["raw_frame_shape"]
+
+    print("Receiving dark frames...")
+    dark_frames = deserialize_buffer(receive_n_frames(metadata["dark_num_total"], network_metadata), shape = metadata["raw_frame_shape"])
+
+    n_some_exp_frames = 4  
+
+    print("Receiving some exposure frames...")
+    #We need some exp frames to compute the center of mass so we take those now and keep them for later 
+    some_exp_frames = deserialize_buffer(receive_n_frames(n_some_exp_frames, network_metadata), shape = metadata["raw_frame_shape"])
+
+    return metadata, np.array(some_exp_frames), dark_frames
+
+def prepare(metadata, dark_frames, raw_frames, network_metadata):
+
+    received_exp_frames = []#this is used when reading from socket, we read some exp frames here first to compute some things so we have to keep them
+
+    #data coming from socket
+    if network_metadata != {}:
+        metadata, center_frames, dark_frames = prepare_from_socket(metadata, network_metadata)
+        received_exp_frames = center_frames
+        print(received_exp_frames.shape)
+
+    #data coming from mem or from disk
+    else:
+        metadata, center_frames, dark_frames = prepare_from_mem(metadata, dark_frames, raw_frames)
     
     metadata, background_avg =  compute_background_metadata(metadata, center_frames, dark_frames)
 
-    return metadata, background_avg
+    return metadata, background_avg, received_exp_frames
 
 
 def prepare_filter_functions(metadata, background_avg):
@@ -204,29 +279,28 @@ def prepare_filter_functions(metadata, background_avg):
     return f_all, f_all_d
 
 
-def process(metadata, raw_frames, background_avg, local_batch_size):
-
+def process(metadata, raw_frames, background_avg, local_batch_size, received_exp_frames, network_metadata):
 
     if metadata["double_exposure"]:
         printv(color("\nProcessing the stack of raw frames as a double exposure scan...\n", bcolors.OKGREEN))
     else:
         printv(color("\nProcessing the stack of raw frames as a single exposure scan...\n", bcolors.OKGREEN))
 
-    printv(color("\r Processing a stack of frames of size: {}".format((raw_frames.shape[0], raw_frames[0].shape[0], raw_frames[0].shape[1])), bcolors.HEADER))
-
     filter_all, filter_all_dexp = prepare_filter_functions(metadata, background_avg)
 
-    if "input_address" in metadata and metadata["input_address"] != None:
-        process_socket(metadata, filter_all, filter_all_dexp)
+    if network_metadata != {}:
+        printv(color("\r Processing a stack of frames of size: {}".format((metadata["exp_num_total"], metadata["raw_frame_shape"], metadata["raw_frame_shape"])), bcolors.HEADER))
+        results = process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, network_metadata)
     else:
-        results =  process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all_dexp)
+        printv(color("\r Processing a stack of frames of size: {}".format((raw_frames.shape[0], raw_frames[0].shape[0], raw_frames[0].shape[1])), bcolors.HEADER))
+        results = process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all_dexp)
 
     return results
 
 
-def process_socket(metadata, filter_all, filter_all_dexp):
+def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, network_metadata):
 
-    buffer_size = 6 #How many frames are stored before sending them to a worker, make it even for double exposure
+    buffer_size = 8 #How many frames are stored before sending them to a worker, make it even for double exposure
 
     output_index = 0
     batch = 1
@@ -237,22 +311,21 @@ def process_socket(metadata, filter_all, filter_all_dexp):
 
     if rank == 0:
 
-        addr = 'tcp://%s' % metadata["input_address"]
-        context = zmq.Context()
+        frames_buffer = list(received_exp_frames) #We initialize here the buffer with the exp frames we have received already
+        index_buffer = list(range(0, len(frames_buffer)))
 
-        input_socket = context.socket(zmq.SUB)
-        input_socket.setsockopt(zmq.SUBSCRIBE, b'')
-        input_socket.set_hwm(2000)
-        input_socket.connect(addr)
-
-        frames_buffer = []
-        index_buffer = []
+        #print(frames_buffer)
+        print(index_buffer)
 
         next_worker = 1
 
+        print("Receiving all exposure frames...")
+
         while True: 
 
-            number, frame = frame_socket.recv_multipart()  # blocking
+            number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
+
+            print("Received frame " + str(number))
 
             if number == None: #A None number means processing is over
                 for i in range(1, mpi_size):
@@ -262,19 +335,17 @@ def process_socket(metadata, filter_all, filter_all_dexp):
                 break 
 
             frames_buffer.append(frame)
-            index_buffer.append(index)
+            index_buffer.append(number)
 
             if len(frames_buffer) == buffer_size:
 
-                comm.send(frames_buffer, dest=next_worker)
+                comm.send(deserialize_buffer(frames_buffer, shape = metadata["raw_frame_shape"]), dest=next_worker)
                 comm.send(index_buffer, dest=next_worker)
 
                 frames_buffer = []
                 index_buffer = []
                 
                 next_worker =  ((next_worker + 1) % mpi_size) + 1             
-
-        input_socket.disconnect(addr)
 
     else:
 
@@ -284,6 +355,9 @@ def process_socket(metadata, filter_all, filter_all_dexp):
 
             frames_batch = comm.recv(source=0)
             indexes = comm.recv(source=0)
+
+            print(str(rank) + ": received ")
+            print(indexes)
 
             if batch == None: break #A None batch means processing is over
 
