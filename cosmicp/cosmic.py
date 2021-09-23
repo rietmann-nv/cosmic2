@@ -91,10 +91,8 @@ if __name__ == '__main__':
     metadata, background_avg, received_exp_frames = prepare(metadata, dark_frames, exp_frames, network_metadata)
     out_data, my_indexes = process(metadata, exp_frames, background_avg, options["batch_size_per_rank"], received_exp_frames, network_metadata)
 
-    f.close
-
-    if "input_address" in options and options["input_address"] != None:
-        network_metadata["input_socket"].disconnect(options["input_address"])
+    if options["fname"].endswith('.h5'):
+        f.close
 
     save_results(options["fname"], metadata, out_data, my_indexes, metadata["translations"].shape[0])
   

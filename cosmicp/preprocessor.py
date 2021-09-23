@@ -289,7 +289,7 @@ def process(metadata, raw_frames, background_avg, local_batch_size, received_exp
     filter_all, filter_all_dexp = prepare_filter_functions(metadata, background_avg)
 
     if network_metadata != {}:
-        printv(color("\r Processing a stack of frames of size: {}".format((metadata["exp_num_total"], metadata["raw_frame_shape"], metadata["raw_frame_shape"])), bcolors.HEADER))
+        printv(color("\r Processing a stack of frames of size: {}".format((metadata["exp_num_total"], metadata["raw_frame_shape"][0], metadata["raw_frame_shape"][1])), bcolors.HEADER))
         results = process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, network_metadata)
     else:
         printv(color("\r Processing a stack of frames of size: {}".format((raw_frames.shape[0], raw_frames[0].shape[0], raw_frames[0].shape[1])), bcolors.HEADER))
@@ -300,87 +300,97 @@ def process(metadata, raw_frames, background_avg, local_batch_size, received_exp
 
 def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, network_metadata):
 
-    buffer_size = 8 #How many frames are stored before sending them to a worker, make it even for double exposure
+    buffer_size = 12 #How many frames are stored in each rank before actually computing them
 
     output_index = 0
     batch = 1
+    number = 0
 
-    #We don't know the shape of the output data per rank so we allocate only the buffer_size, we keep resizing it with each new batch we get
-    out_data_shape = (buffer_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
+    n_batches = metadata["exp_num_total"] // mpi_size
+
+    #Here we correct if the total number of frames is not a multiple of mpi_size  
+    extra_frames = metadata["exp_num_total"] - (n_batches * mpi_size)
+
+    extra = 0
+    if rank < extra_frames: 
+        extra = 1
+
+    out_data_shape = (n_batches * mpi_size //(metadata['double_exposure']+1) + extra, metadata["output_frame_width"], metadata["output_frame_width"])
+
+    print(out_data_shape)
+
     out_data = np.empty(out_data_shape,dtype=np.float32)
 
-    if rank == 0:
+    frames_buffer = [] 
+    index_buffer = []
 
-        frames_buffer = list(received_exp_frames) #We initialize here the buffer with the exp frames we have received already
-        index_buffer = list(range(0, len(frames_buffer)))
+    processed_batches = 0
 
-        #print(frames_buffer)
-        print(index_buffer)
+    #We initialize here the buffer with the exp frames we have received already
+    for i in range(0,len(received_exp_frames)):
+        if (i % mpi_size) == rank:
+            frames_buffer.append(received_exp_frames[i].astype(npo.uint16)) #We will deserialize these frames again below, so we cast back to uint16
+            index_buffer.append(i)
 
-        next_worker = 1
+    my_indexes = []
 
-        print("Receiving all exposure frames...")
+    #print(frames_buffer)
+    print(index_buffer)
 
-        while True: 
+    print("Receiving all exposure frames...")
 
-            number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
+    while number != metadata["exp_num_total"] - 1: 
 
-            print("Received frame " + str(number))
+        number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
 
-            if number == None: #A None number means processing is over
-                for i in range(1, mpi_size):
-                    print("Ending worker " + str(i))
-                    comm.send(None, dest=i)
-                    comm.send(None, dest=i)
-                break 
+        print("Received frame " + str(number))
+
+        number = int(number)
+
+        #Each rank takes only some frames
+        if (number % mpi_size) == rank: 
 
             frames_buffer.append(frame)
             index_buffer.append(number)
 
-            if len(frames_buffer) == buffer_size:
+            print(len(frames_buffer))
+ 
+        #after filling the buffer we do the processing, or if it the last frame we consume the buffer too
+        if len(frames_buffer) == buffer_size or number == metadata["exp_num_total"] - 1:
 
-                comm.send(deserialize_buffer(frames_buffer, shape = metadata["raw_frame_shape"]), dest=next_worker)
-                comm.send(index_buffer, dest=next_worker)
+            print("Processing buffer")
 
-                frames_buffer = []
-                index_buffer = []
-                
-                next_worker =  ((next_worker + 1) % mpi_size) + 1             
+            frames_buffer = np.array(deserialize_buffer(frames_buffer, shape = metadata["raw_frame_shape"]))
 
-    else:
+            print(frames_buffer)
 
-        while True: 
+            my_indexes.extend(index_buffer)
 
-            n_batches = 1
-
-            frames_batch = comm.recv(source=0)
-            indexes = comm.recv(source=0)
-
-            print(str(rank) + ": received ")
-            print(indexes)
-
-            if batch == None: break #A None batch means processing is over
-
-            n_frames_out = frames_batch.shape[0] // (metadata['double_exposure']+1)
-
-            my_indexes.extend(indexes)
+            n_frames_out = frames_buffer.shape[0] // (metadata['double_exposure']+1)
 
             if metadata["double_exposure"]:
-                centered_rescaled_frames_jax = filter_all_dexp(frames_batch[:-1:2], frames_batch[1::2])
+                centered_rescaled_frames_jax = filter_all_dexp(frames_buffer[:-1:2], frames_buffer[1::2])
             else:
-                centered_rescaled_frames_jax = filter_all(frames_batch)
+                centered_rescaled_frames_jax = filter_all(frames_buffer)
 
             # TODO: 'centered_rescaled_frames_jax' picks up an additional dimension somehow, should fix this...
             out_data = jax.ops.index_update(out_data, jax.ops.index[output_index:output_index + n_frames_out, :, :], centered_rescaled_frames_jax[:,0,:,:])
 
-            output_index += n_frames_out
-            n_batches += 1
+            print(output_index)
 
-            if rank == 1:
-                sys.stdout.write(color("\r Computing batch = %s of %s frames" %(n_batches, n_frames_out), bcolors.HEADER))
+            #print(out_data[output_index:output_index + n_frames_out, :, :])
+
+            frames_buffer = []
+            index_buffer = []
+
+            output_index += n_frames_out
+            processed_batches += 1
+
+            if rank == 0:
+                sys.stdout.write(color("\r Computing batch = %s of %s frames" %(processed_batches, n_frames_out), bcolors.HEADER))
                 sys.stdout.flush()
 
-        if rank == 1: print("\n")
+        if rank == 0: print("\n")
 
     return out_data, my_indexes
 
@@ -474,7 +484,15 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
         printv(color("\r Final output data size: {}".format(frames_gather.shape), bcolors.HEADER))
 
+        print(index_gather)
+
+        #for i in range(0, frames_gather.shape[0]):
+        #    print(frames_gather[i][0:10])
+
         dataAve = frames_gather[()].mean(0)
+
+        print("hi")
+
         pMask = np.fft.fftshift((dataAve > 0.1 * dataAve.max()))
         probe = np.sqrt(np.fft.fftshift(dataAve)) * pMask
         probe = np.fft.ifftshift(np.fft.ifftn(probe))
