@@ -19,7 +19,7 @@ from .common import  size as mpi_size
 from .diskIO import IO, frames_out
 
 from timeit import default_timer as timer
-
+from functools import partial
 
 @jax.jit
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
@@ -48,7 +48,7 @@ def filter_frame(frame, bbox):
 
 
 #Interpolation around the center of mass, thus centering. This downsamples into the output frame width
-@jax.partial(jax.jit, static_argnums=2)
+@partial(jax.jit, static_argnums=2)
 def shift_rescale(img, center_of_mass, out_frame_shape, scale):
 
     img_out = jax.image.scale_and_translate(img, [out_frame_shape, out_frame_shape], [0,1], jax.numpy.array([scale, scale]), jax.numpy.array([center_of_mass[1], center_of_mass[0]]) , method = "bilinear", antialias = False).T
