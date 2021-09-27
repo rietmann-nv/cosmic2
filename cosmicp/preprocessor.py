@@ -180,7 +180,10 @@ def receive_n_frames(n_frames, network_metadata):
 def deserialize_buffer(buf, t = npo.uint16, shape = (512, 512)):
 
     for i in range(0, len(buf)):
-        buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
+        if(isinstance(buf[i], np.DeviceArray)):
+            buf[i] = buf[i].astype(np.float32)
+        else:
+            buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
 
     return buf
 
