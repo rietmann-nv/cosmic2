@@ -19,7 +19,7 @@ from .common import  size as mpi_size
 from .diskIO import IO, frames_out
 
 from timeit import default_timer as timer
-
+from functools import partial
 
 @jax.jit
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
@@ -48,7 +48,7 @@ def filter_frame(frame, bbox):
 
 
 #Interpolation around the center of mass, thus centering. This downsamples into the output frame width
-@jax.partial(jax.jit, static_argnums=2)
+@partial(jax.jit, static_argnums=2)
 def shift_rescale(img, center_of_mass, out_frame_shape, scale):
 
     img_out = jax.image.scale_and_translate(img, [out_frame_shape, out_frame_shape], [0,1], jax.numpy.array([scale, scale]), jax.numpy.array([center_of_mass[1], center_of_mass[0]]) , method = "bilinear", antialias = False).T
@@ -180,7 +180,10 @@ def receive_n_frames(n_frames, network_metadata):
 def deserialize_buffer(buf, t = npo.uint16, shape = (512, 512)):
 
     for i in range(0, len(buf)):
-        buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
+        if(isinstance(buf[i], np.DeviceArray)):
+            buf[i] = buf[i].astype(np.float32)
+        else:
+            buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
 
     return buf
 
@@ -470,13 +473,22 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
     n_elements = npo.prod([i for i in local_data.shape])
 
+    # this exits without crash
+    # sys.exit(1)
+
     frames_gather = gather(local_data, (n_frames, local_data[0].shape[0], local_data[0].shape[1]), n_elements, npo.float32)  
 
+    # this exits without crash
+    sys.exit(1)
+
+    # I think this crashes!
     #we need the indexes too to map properly each gathered frame
     index_gather = gather(my_indexes, n_frames, len(my_indexes), npo.int32)
 
     if rank == 0:
 
+        # crashes here
+        # sys.exit(1)
         #Here we generate a proper index pull map, with respect to the input
         index_gather = npo.array([ npo.where(index_gather==i)[0][0] for i in range(0,len(index_gather))])
 
@@ -489,14 +501,18 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
         #for i in range(0, frames_gather.shape[0]):
         #    print(frames_gather[i][0:10])
 
+        # crashes here
+        # sys.exit(1)
         dataAve = frames_gather[()].mean(0)
 
         print("hi")
+        # this exits with crash
+        # sys.exit(1)
 
         pMask = np.fft.fftshift((dataAve > 0.1 * dataAve.max()))
         probe = np.sqrt(np.fft.fftshift(dataAve)) * pMask
         probe = np.fft.ifftshift(np.fft.ifftn(probe))
-
+        
         output_filename = os.path.splitext(fname)[:-1][0][:-5]
 
         if cxi_file:
