@@ -91,7 +91,7 @@ setup_info = dict(
 
     data_files=[('src', glob('cosmicp/*.py'))],
 
-    scripts= glob('cosmicp/cosmic.py'),
+    scripts= glob('cosmicp/cosmic_run.py'),
 
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',

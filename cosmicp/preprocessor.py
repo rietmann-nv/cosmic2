@@ -2,6 +2,7 @@ import sys
 import os
 import jax.numpy as np
 import jax
+from jax.experimental import loops
 import jax.ops
 import jax.dlpack
 import scipy
@@ -12,6 +13,7 @@ import numpy as npo
 import math
 import zmq
 import json
+import IPython
 from .nexus_io import write, nexus_metadata, nexus_data, cosmic_metadata
 from .fccd import imgXraw as cleanXraw
 from .common import printd, printv, rank, gather, color, bcolors, comm
@@ -20,6 +22,9 @@ from .diskIO import IO, frames_out
 
 from timeit import default_timer as timer
 from functools import partial
+
+import cupy.cuda.nvtx as nvtx
+
 
 @jax.jit
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
@@ -71,10 +76,95 @@ def split_background(background_double_exp):
     return np.array([bkg_avg0, bkg_avg1])
 
 
+@jax.jit
+def clean_frames(dark_frames, frames, metadata):
+    background_avg = split_background(dark_frames)
+
+    clean_frame_shape = cleanXraw(frames[0,:,:]).shape
+
+    clean_frame = np.zeros((frames.shape[0]//2, clean_frame_shape[0], clean_frame_shape[1]))
+    m_ratio = metadata["double_exp_time_ratio"]
+    for i in range(0, frames.shape[0], 2):
+            
+        frame_exp1 = frames[i] - background_avg[0]
+        frame_exp2 = frames[i + 1] - background_avg[1]
+        clean_exp1 = cleanXraw(frame_exp1)
+        clean_exp2 = cleanXraw(frame_exp2)
+        exp1_exp2 = combine_double_exposure(clean_exp1, clean_exp2, m_ratio)
+        # get clean frames
+        clean_frame = jax.ops.index_update(clean_frame, jax.ops.index[i, :, :], exp1_exp2)
+    return clean_frame, background_avg
+
+def compute_background_metadata_v2(metadata, frames, dark_frames):
+
+    ## get one frame to compute center
+    print("Frames.shape=", frames.shape)
+    start = timer()
+    clean_frame = []
+    if metadata["double_exposure"]:
+
+        clean_frame, background_avg = clean_frames(dark_frames, frames, metadata)
+    
+    else:
+        background_avg = np.average(dark_frames,axis=0)
+        for i in range(0, frames.shape[0], 1):
+
+            # get clean frames
+            clean_frame.append(cleanXraw(frames[i] - background_avg))
+
+    end = timer()
+    print("clean frames (de={}): {}s".format(metadata["double_exposure"], end-start))
+
+    metadata["frame_width"] = clean_frame.shape[0]
+
+    #Coordinates from 0 to frame width, 1 dimension
+    xx=np.reshape(np.arange(metadata["frame_width"]),(metadata["frame_width"],1))
+    yy=np.reshape(np.arange(metadata["output_frame_width"]),(metadata["output_frame_width"],1))
+
+    # cropped width of the raw clean frames
+    if metadata["desired_padded_input_frame_width"]:
+        metadata["padded_frame_width"] = metadata["desired_padded_input_frame_width"]
+
+    else:
+        metadata["padded_frame_width"] = resolution2frame_width(metadata["final_res"], metadata["detector_distance"], metadata["energy"], metadata["detector_pixel_size"], metadata["frame_width"]) 
+    
+    # modify pixel size; the pixel size is rescaled
+    metadata["x_pixel_size"] = metadata["detector_pixel_size"] * metadata["padded_frame_width"] / metadata["output_frame_width"]
+    metadata["y_pixel_size"] = metadata["x_pixel_size"]
+
+    # frame corner
+    corner_x = metadata['x_pixel_size']*metadata['output_frame_width']/2  
+    corner_z = metadata['detector_distance']                
+    metadata['corner_position'] = [corner_x, corner_x, corner_z]
+    metadata["energy"] = metadata["energy"]*scipy.constants.elementary_charge
+
+    #Convolution kernel
+    kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
+    bbox = np.ones((kernel_width,kernel_width))
+
+    filtered_frames = []
+    for i in range(0, clean_frame.shape[0]):
+        # clean_frame[i] = filter_frame(clean_frame[i], bbox)
+        clean_frame = jax.ops.index_update(clean_frame, jax.ops.index[i], filter_frame(clean_frame[i], bbox))
+        
+        filtered_frames.append(shift_rescale(clean_frame[i], (0,0), metadata["output_frame_width"], metadata["output_frame_width"]/metadata["padded_frame_width"])[0])
+
+    filtered_frames = np.array(filtered_frames)
+
+    com = center_of_mass(filtered_frames*(filtered_frames>0), yy)
+
+    com = np.round(com)
+
+    metadata["center_of_mass"] = metadata["output_frame_width"]//2 - com
+    metadata["output_padded_ratio"] = metadata["output_frame_width"]/metadata["padded_frame_width"]
+
+    return metadata, background_avg
+
+
 def compute_background_metadata(metadata, frames, dark_frames):
 
     ## get one frame to compute center
-
+    print("Frames.shape=", frames.shape)
     clean_frame = [] 
     if metadata["double_exposure"]:
 
@@ -96,6 +186,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
     clean_frame = npo.array(clean_frame)
 
     metadata["frame_width"] = clean_frame.shape[0]
+    IPython.embed()
 
     #Coordinates from 0 to frame width, 1 dimension
     xx=np.reshape(np.arange(metadata["frame_width"]),(metadata["frame_width"],1))
@@ -189,8 +280,6 @@ def deserialize_buffer(buf, t = npo.uint16, shape = (512, 512)):
 
 def prepare_from_mem(metadata, dark_frames, raw_frames):
 
-    dark_frames = np.array(dark_frames)
-
     n_frames = raw_frames.shape[0]
     n_total_frames = metadata["translations"].shape[0]
     if metadata["double_exposure"]: n_total_frames *= 2
@@ -203,18 +292,18 @@ def prepare_from_mem(metadata, dark_frames, raw_frames):
         center -= 1
 
     extra_frames = 2  #we take a couple more frames to compute the center of mass, careful not to start on an odd exposure frame here
-
+    
     center_frames = []
     if metadata["double_exposure"]:
         for i in range(center, center + extra_frames + 1, 2):
-            center_frames.append(raw_frames[i])
-            center_frames.append(raw_frames[i + 1])
+            center_frames.append(i)
+            center_frames.append(i + 1)
     else:
         for i in range(center, center + extra_frames + 1, 1):
-            center_frames.append(raw_frames[i])
+            center_frames.append(i)
 
-    center_frames = np.array(center_frames)
-
+    center_frames = raw_frames[center_frames, :, :]
+    
     return metadata, center_frames, dark_frames
 
 
@@ -246,9 +335,20 @@ def prepare(metadata, dark_frames, raw_frames, network_metadata):
 
     #data coming from mem or from disk
     else:
+        nvtx.RangePush("prepare_from_mem")
+        start = timer()
         metadata, center_frames, dark_frames = prepare_from_mem(metadata, dark_frames, raw_frames)
+        end = timer()
+        print("Time 'prepare_from_mem()':", end-start)
+        nvtx.RangePop()
     
-    metadata, background_avg =  compute_background_metadata(metadata, center_frames, dark_frames)
+
+    nvtx.RangePush("compute_background_metadata")
+    start = timer()
+    metadata, background_avg =  compute_background_metadata_v2(metadata, center_frames, dark_frames)
+    end = timer()
+    print("compute_background_metadata_v2: {}s".format(end-start))
+    nvtx.RangePop()
 
     return metadata, background_avg, received_exp_frames
 
@@ -346,8 +446,6 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
         number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
 
-        print("Received frame " + str(number))
-
         number = int(number)
 
         #Each rank takes only some frames
@@ -400,6 +498,7 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
 def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all_dexp):
 
+    print("(batch)raw_frames.shape:", raw_frames.shape)
     n_total_frames = raw_frames.shape[0]
 
     #if the batch size is not even in double exposure we fix that
@@ -432,7 +531,7 @@ def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all
     
     out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
     out_data = np.empty(out_data_shape,dtype=np.float32)
-    frames_batch = npo.empty((local_batch_size, raw_frames[0].shape[0], raw_frames[0].shape[1]))
+    frames_batch = np.empty((local_batch_size, raw_frames[0].shape[0], raw_frames[0].shape[1]))
 
     for i in range(0, n_batches):
 
@@ -448,13 +547,16 @@ def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all
         i_s = i * local_batch_size // (metadata['double_exposure']+1)
         i_e = i_s + local_batch_size // (metadata['double_exposure']+1)
 
-        for j in range(local_i, upper_bound) : 
-            frames_batch[j % local_batch_size] = raw_frames[j][:, :]
+        # for j in range(local_i, upper_bound) : 
+        #     # frames_batch[j % local_batch_size] = raw_frames[j][:, :]
+        #     frames_batch = jax.ops.index_update(frames_batch, jax.ops.index[j % local_batch_size], raw_frames[j][:, :])
+
+            
 
         if metadata["double_exposure"]:
-            centered_rescaled_frames_jax = filter_all_dexp(frames_batch[:-1:2], frames_batch[1::2])
+            centered_rescaled_frames_jax = filter_all_dexp(raw_frames[local_i:upper_bound-1:2], raw_frames[local_i+1:upper_bound:2])
         else:
-            centered_rescaled_frames_jax = filter_all(frames_batch)
+            centered_rescaled_frames_jax = filter_all(raw_frames[local_i:upper_bound])
 
         # TODO: 'centered_rescaled_frames_jax' picks up an additional dimension somehow, should fix this...
         out_data = jax.ops.index_update(out_data, jax.ops.index[i_s:i_e, :, :], centered_rescaled_frames_jax[:,0,:,:])
