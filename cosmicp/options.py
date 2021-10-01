@@ -11,6 +11,13 @@ help =   "\nUsage: cosmicp.py [options] input.json\n\n\
 \t -b N -> Set local batch size = N, per MPI rank. N = 20 by default.\n\
 \n\n".format(default_conf)
 
+def default_options():
+    return {'gpu_accelerated': True,
+            'conf_file': '/home/max/cosmicp_config/default.json',
+            'batch_size_per_rank': 50,
+            'fname': 'sim'}
+
+
 def parse_arguments(args, options = None):
 
     printv(color("\nParsing parameters...\n", bcolors.OKGREEN))
