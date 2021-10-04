@@ -6,6 +6,7 @@ import h5py
 import zmq
 from cosmicp.options import parse_arguments
 from cosmicp.common import rank, size, mpi_enabled, printd, printv, set_visible_device, complete_metadata, color, bcolors
+import socket
 
 if __name__ == '__main__':
     args = sys.argv[1:]
@@ -42,13 +43,19 @@ if __name__ == '__main__':
     from cosmicp.preprocessor import prepare, process, save_results, receive_metadata, subscribe_to_socket
     from timeit import default_timer as timer
 
-    options["input_address"] = options["fname"] 
     network_metadata = {}
 
-    #data coming from socket
-    if "input_address" in options and options["input_address"] != None:
+    #See if we have a file or an ip address
+    try:
+        socket.inet_aton(options["fname"].split(":")[0]) #We need the split to remove the port number
+        network_metadata["input_address"] = options["fname"]
+        print("Processing data from socket")
+    except OSError:
+        print("Processing data from disk")
+        pass
 
-        network_metadata["input_address"] = options["input_address"]
+    #data coming from socket
+    if network_metadata != {}:
 
         network_metadata["context"] = zmq.Context()
 
@@ -78,6 +85,8 @@ if __name__ == '__main__':
         #fname = "/cosmic-dtn/groups/cosmic/Data/2021/09/210916/210916003/raw_data.h5"
 
         metadata = read_metadata_hdf5(options["fname"])
+        #metadata = diskIO.read_metadata("/cosmic-dtn/groups/cosmic/Data/2021/09/210923/210923044/210923044_002_info.json")
+
         metadata = complete_metadata(metadata, options["conf_file"])
 
         print(metadata)
