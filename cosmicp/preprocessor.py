@@ -24,7 +24,8 @@ from timeit import default_timer as timer
 from functools import partial
 
 import cupy.cuda.nvtx as nvtx
-
+import msgpack
+import msgpack_numpy
 
 @jax.jit
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
@@ -260,7 +261,10 @@ def receive_n_frames(n_frames, network_metadata):
 
     while n_received < n_frames: 
 
-        number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
+        msg = network_metadata["input_socket"].recv()
+
+        (number, frame) = msgpack.unpackb(msg, object_hook= msgpack_numpy.decode, use_list=False,  max_bin_len=50000000, raw=False)
+
         print("Received frame " + str(number))
 
         frames.append(frame)
@@ -268,13 +272,24 @@ def receive_n_frames(n_frames, network_metadata):
 
     return frames
 
+from PIL import Image
+
+index = 0
+
 def deserialize_buffer(buf, t = npo.uint16, shape = (512, 512)):
 
+    global index
     for i in range(0, len(buf)):
+
         if(isinstance(buf[i], np.DeviceArray)):
             buf[i] = buf[i].astype(np.float32)
         else:
             buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
+
+        #im1 = Image.fromarray(npo.array(buf[i]))
+        #im1.convert("L").save("deserialized_" + str(index) + ".png")
+        
+        index += 1
 
     return buf
 
@@ -431,9 +446,9 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
     #We initialize here the buffer with the exp frames we have received already
     for i in range(0,len(received_exp_frames)):
-        if (i % mpi_size) == rank:
+        if ((i // (metadata["double_exposure"] + 1)) % mpi_size) == rank:
             frames_buffer.append(received_exp_frames[i].astype(npo.uint16)) #We will deserialize these frames again below, so we cast back to uint16
-            index_buffer.append(i)
+            index_buffer.append(i // (metadata["double_exposure"] + 1))
 
     my_indexes = []
 
@@ -444,19 +459,22 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
     while number != metadata["exp_num_total"] - 1: 
 
-        number, frame = network_metadata["input_socket"].recv_multipart()  # blocking
+        msg = network_metadata["input_socket"].recv()  # blocking
+
+        (number, frame) = msgpack.unpackb(msg, object_hook= msgpack_numpy.decode, use_list=False,  max_bin_len=50000000, raw=False)
 
         number = int(number)
+        final_number = number // (metadata["double_exposure"] + 1)
 
         #Each rank takes only some frames
-        if (number % mpi_size) == rank: 
+        if (final_number % mpi_size) == rank: 
 
             frames_buffer.append(frame)
-            index_buffer.append(number)
+            index_buffer.append(final_number)
 
             print(len(frames_buffer))
  
-        #after filling the buffer we do the processing, or if it the last frame we consume the buffer too
+        #after filling the buffer we do the processing, or if it is the last frame we consume the buffer too
         if len(frames_buffer) == buffer_size or number == metadata["exp_num_total"] - 1:
 
             print("Processing buffer")
@@ -465,7 +483,8 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
             print(frames_buffer)
 
-            my_indexes.extend(index_buffer)
+            #if double exposure we take 1 every 2 (because indexes are duplicated as they are divided by 2 above)
+            my_indexes.extend(index_buffer[::metadata["double_exposure"] + 1]) 
 
             n_frames_out = frames_buffer.shape[0] // (metadata['double_exposure']+1)
 
@@ -568,22 +587,17 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
     n_elements = npo.prod([i for i in local_data.shape])
 
-    # this exits without crash
-    # sys.exit(1)
-
     frames_gather = gather(local_data, (n_frames, local_data[0].shape[0], local_data[0].shape[1]), n_elements, npo.float32)  
 
-    # this exits without crash
-    sys.exit(1)
+    print(my_indexes)
 
-    # I think this crashes!
     #we need the indexes too to map properly each gathered frame
     index_gather = gather(my_indexes, n_frames, len(my_indexes), npo.int32)
 
+    print(index_gather)
+
     if rank == 0:
 
-        # crashes here
-        # sys.exit(1)
         #Here we generate a proper index pull map, with respect to the input
         index_gather = npo.array([ npo.where(index_gather==i)[0][0] for i in range(0,len(index_gather))])
 
@@ -596,13 +610,9 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
         #for i in range(0, frames_gather.shape[0]):
         #    print(frames_gather[i][0:10])
 
-        # crashes here
-        # sys.exit(1)
         dataAve = frames_gather[()].mean(0)
 
         print("hi")
-        # this exits with crash
-        # sys.exit(1)
 
         pMask = np.fft.fftshift((dataAve > 0.1 * dataAve.max()))
         probe = np.sqrt(np.fft.fftshift(dataAve)) * pMask
