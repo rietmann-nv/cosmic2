@@ -530,8 +530,7 @@ def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all
             extra_last_batch = - (local_batch_size - (extra % local_batch_size)) // (metadata['double_exposure']+1)     
     
     out_data_shape = (n_batches * local_batch_size //(metadata['double_exposure']+1) , metadata["output_frame_width"], metadata["output_frame_width"])
-    out_data = np.empty(out_data_shape,dtype=np.float32)
-    frames_batch = np.empty((local_batch_size, raw_frames[0].shape[0], raw_frames[0].shape[1]))
+    out_data = np.zeros(out_data_shape,dtype=np.float32)
 
     for i in range(0, n_batches):
 
@@ -544,14 +543,8 @@ def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all
 
         my_indexes.extend(local_range)
 
-        i_s = i * local_batch_size // (metadata['double_exposure']+1)
-        i_e = i_s + local_batch_size // (metadata['double_exposure']+1)
-
-        # for j in range(local_i, upper_bound) : 
-        #     # frames_batch[j % local_batch_size] = raw_frames[j][:, :]
-        #     frames_batch = jax.ops.index_update(frames_batch, jax.ops.index[j % local_batch_size], raw_frames[j][:, :])
-
-            
+        i_s = local_i // (metadata['double_exposure']+1)
+        i_e = upper_bound // (metadata['double_exposure']+1)
 
         if metadata["double_exposure"]:
             centered_rescaled_frames_jax = filter_all_dexp(raw_frames[local_i:upper_bound-1:2], raw_frames[local_i+1:upper_bound:2])
