@@ -12,6 +12,7 @@ import numpy as npo
 import math
 import zmq
 import json
+import threading
 from .nexus_io import write, nexus_metadata, nexus_data, cosmic_metadata
 from .fccd import imgXraw as cleanXraw
 from .common import printd, printv, rank, gather, color, bcolors, comm
@@ -109,7 +110,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
         metadata["padded_frame_width"] = metadata["desired_padded_input_frame_width"]
 
     else:
-        metadata["padded_frame_width"] = resolution2frame_width(metadata["final_res"], metadata["detector_distance"], metadata["energy"], metadata["detector_pixel_size"], metadata["frame_width"]) 
+        metadata["padded_frame_width"] = float(resolution2frame_width(metadata["final_res"], metadata["detector_distance"], metadata["energy"], metadata["detector_pixel_size"], metadata["frame_width"]))
     
     # modify pixel size; the pixel size is rescaled
     metadata["x_pixel_size"] = metadata["detector_pixel_size"] * metadata["padded_frame_width"] / metadata["output_frame_width"]
@@ -135,7 +136,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
 
     com = center_of_mass(filtered_frames*(filtered_frames>0), yy)
 
-    com = np.round(com)
+    com = npo.array(np.round(com))
 
     metadata["center_of_mass"] = metadata["output_frame_width"]//2 - com
     metadata["output_padded_ratio"] = metadata["output_frame_width"]/metadata["padded_frame_width"]
@@ -147,12 +148,40 @@ def subscribe_to_socket(network_metadata):
 
     addr = 'tcp://%s' % network_metadata["input_address"]
 
-    input_socket = network_metadata["context"].socket(zmq.SUB)
-    input_socket.setsockopt(zmq.SUBSCRIBE, b'')
-    input_socket.set_hwm(2000)
-    input_socket.connect(addr)
+    socket = network_metadata["context"].socket(zmq.SUB)
+    socket.setsockopt(zmq.SUBSCRIBE, b'')
+    socket.set_hwm(2000)
+    socket.connect(addr)
 
-    return input_socket
+    return socket
+
+def publish_to_socket(network_metadata):
+
+    addr = 'tcp://%s' % network_metadata["intermediate_address"]
+
+    socket = network_metadata["context"].socket(zmq.PUB)
+    socket.set_hwm(2000)
+    socket.connect(addr)
+
+    return socket
+
+def xsub_xpub_router(network_metadata):
+
+    print("Setting up XSUB XPUB router, this will cast a thread running with the proxy router...")
+
+    frontend_socket = network_metadata["context"].socket(zmq.XPUB)
+    frontend_socket.bind('tcp://%s' % network_metadata["output_address"])
+
+    backend_socket = network_metadata["context"].socket(zmq.XSUB)
+    backend_socket.bind('tcp://%s' % network_metadata["intermediate_address"])
+
+    th = threading.Thread(target=zmq.proxy, args = (frontend_socket, backend_socket))
+    th.start()
+
+    #zmq.proxy(frontend_socket, backend_socket)
+
+    return th
+
 
 def receive_metadata(network_metadata):
 
@@ -162,6 +191,19 @@ def receive_metadata(network_metadata):
     print(metadata)
 
     return metadata
+
+def send_metadata(network_metadata, metadata):
+    print("Sending metadata to socket...")
+
+    #We remove ndarrays here so that we can serialize all the metadata.
+    metadata_plain = metadata.copy()
+
+    metadata_plain["translations"] = metadata_plain["translations"].tolist()
+    metadata_plain["center_of_mass"] = metadata_plain["center_of_mass"].tolist()
+
+    print(metadata_plain)
+
+    network_metadata["intermediate_socket"].send_string(json.dumps(metadata_plain))
 
 
 def receive_n_frames(n_frames, network_metadata):
@@ -320,11 +362,17 @@ def process(metadata, raw_frames, background_avg, local_batch_size, received_exp
 
 def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, network_metadata):
 
-    buffer_size = 12 #How many frames are stored in each rank before actually computing them
+    input_buffer_size = 12 #How many frames are stored in each rank before actually computing them
+
+    #How many frames are stored in each rank before sending them out to a socket, 
+    #this always has to be >= than input_buffer_size// (metadata['double_exposure']+1)
+    output_buffer_size = 12 
 
     output_index = 0
     batch = 1
     number = 0
+
+    output_socket = "intermediate_socket" in network_metadata
 
     n_batches = metadata["exp_num_total"] // mpi_size
 
@@ -357,6 +405,9 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
     #print(frames_buffer)
     print(index_buffer)
 
+    frames_received = len(received_exp_frames) // (metadata["double_exposure"] + 1)
+    frames_sent = 0
+
     print("Receiving all exposure frames...")
 
     while number != metadata["exp_num_total"] - 1: 
@@ -376,12 +427,11 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
             frames_buffer.append(frame)
             index_buffer.append(final_number)
 
-            print(len(frames_buffer))
  
         #after filling the buffer we do the processing, or if it is the last frame we consume the buffer too
-        if len(frames_buffer) == buffer_size or number == metadata["exp_num_total"] - 1:
+        if len(frames_buffer) == input_buffer_size or number == metadata["exp_num_total"] - 1:
 
-            print("Processing buffer")
+            print("Processing input frames buffer...")
 
             frames_buffer = np.array(deserialize_buffer(frames_buffer, shape = metadata["raw_frame_shape"]))
 
@@ -411,10 +461,30 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
             processed_batches += 1
 
             if rank == 0:
-                sys.stdout.write(color("\r Computing batch = %s of %s frames" %(processed_batches, n_frames_out), bcolors.HEADER))
+                sys.stdout.write(color("\r Computing batch = %s of %s frames\n" %(processed_batches, n_frames_out), bcolors.HEADER))
                 sys.stdout.flush()
 
-        if rank == 0: print("\n")
+        #Seding frames to socket
+        if output_socket and (frames_received % output_buffer_size == 0 or number == metadata["exp_num_total"] - 1):
+
+            max_index = min(frames_sent + output_buffer_size, (metadata["exp_num_total"])// (metadata['double_exposure']+1))
+
+            print("Sending output frames buffer...")
+            for i in range(frames_sent, max_index):
+                print(i)
+                print("Sending frame " + str(my_indexes[i]) + " to socket")
+
+                msg = msgpack.packb((b'%d' % my_indexes[i], npo.array(out_data[i])), default=msgpack_numpy.encode, use_bin_type=True)
+
+                network_metadata["intermediate_socket"].send(msg)
+
+            frames_sent += output_buffer_size
+            print("{} frames sent".format(min(frames_sent, (metadata["exp_num_total"])// (metadata['double_exposure']+1))))
+
+        #if rank == 0: print("\n")
+
+        frames_received = frames_received + 1/ (metadata['double_exposure']+1)
+        print(frames_received)
 
     return out_data, my_indexes
 

@@ -40,7 +40,7 @@ if __name__ == '__main__':
     import cosmicp.preprocessor as preprocessor
 
     from cosmicp.diskIO import frames_out, map_tiffs, read_metadata_hdf5
-    from cosmicp.preprocessor import prepare, process, save_results, receive_metadata, subscribe_to_socket
+    from cosmicp.preprocessor import prepare, process, save_results, receive_metadata, subscribe_to_socket, xsub_xpub_router, publish_to_socket, send_metadata
     from timeit import default_timer as timer
 
     network_metadata = {}
@@ -49,10 +49,16 @@ if __name__ == '__main__':
     try:
         socket.inet_aton(options["fname"].split(":")[0]) #We need the split to remove the port number
         network_metadata["input_address"] = options["fname"]
-        print("Processing data from socket")
+        printv(color("\nProcessing data from socket\n", bcolors.OKGREEN))
     except OSError:
-        print("Processing data from disk")
+        printv(color("\nProcessing data from disk\n", bcolors.OKGREEN))
         pass
+
+    #data coming from socket
+    if network_metadata == {} and options["output_mode"] != "disk":
+
+        printv(color("Output socket mode is only available when input data also comes from socket, use -m 'disk' when reading input from disk", bcolors.WARNING))
+        sys.exit(2)
 
     #data coming from socket
     if network_metadata != {}:
@@ -96,13 +102,37 @@ if __name__ == '__main__':
         dark_frames = f["entry_1/data_1/dark_frames"]
         exp_frames = f["entry_1/data_1/exp_frames"]
 
+    
+    if options["output_mode"] != "disk":
+
+        #This will be published so that a downstream process connects
+        network_metadata["output_address"] = options["output_address"] 
+        #Threads of this process will publish to this address, and a router subscribes here
+        network_metadata["intermediate_address"] = options["intermediate_address"]
+
+        network_metadata["intermediate_socket"] = publish_to_socket(network_metadata)
+
+        #rank 0 sets up the xsub and xpub router
+        if rank == 0:
+            xsub_xpub_router(network_metadata)
 
     metadata, background_avg, received_exp_frames = prepare(metadata, dark_frames, exp_frames, network_metadata)
+
+    if options["output_mode"] != "disk":
+        send_metadata(network_metadata, metadata)
+
     out_data, my_indexes = process(metadata, exp_frames, background_avg, options["batch_size_per_rank"], received_exp_frames, network_metadata)
 
     if options["fname"].endswith('.h5'):
         f.close
 
-    save_results(options["fname"], metadata, out_data, my_indexes, metadata["translations"].shape[0])
+    #In socket mode we don't save the final results
+    if options["output_mode"] != "socket":
+        save_results(options["fname"], metadata, out_data, my_indexes, metadata["translations"].shape[0])
+
+    #if network_metadata != {} and rank == 0:
+    #    network_metadata["context"].destroy()
+
+
   
 
