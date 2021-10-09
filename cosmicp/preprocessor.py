@@ -229,22 +229,6 @@ from PIL import Image
 
 index = 0
 
-def deserialize_buffer(buf, t = npo.uint16, shape = (512, 512)):
-
-    global index
-    for i in range(0, len(buf)):
-
-        if(isinstance(buf[i], np.DeviceArray)):
-            buf[i] = buf[i].astype(np.float32)
-        else:
-            buf[i] = npo.frombuffer(buf[i], t).astype(npo.float32).reshape(shape)
-
-        #im1 = Image.fromarray(npo.array(buf[i]))
-        #im1.convert("L").save("deserialized_" + str(index) + ".png")
-        
-        index += 1
-
-    return buf
 
 def prepare_from_mem(metadata, dark_frames, raw_frames):
 
@@ -279,17 +263,14 @@ def prepare_from_mem(metadata, dark_frames, raw_frames):
 
 def prepare_from_socket(metadata, network_metadata):
 
-    #The raw frames shape will be sent before the dark frames
-    metadata["raw_frame_shape"] = receive_metadata(network_metadata)["raw_frame_shape"]
-
     print("Receiving dark frames...")
-    dark_frames = deserialize_buffer(receive_n_frames(metadata["dark_num_total"], network_metadata), shape = metadata["raw_frame_shape"])
+    dark_frames = receive_n_frames(metadata["dark_num_total"], network_metadata)
 
     n_some_exp_frames = 4  
 
     print("Receiving some exposure frames...")
     #We need some exp frames to compute the center of mass so we take those now and keep them for later 
-    some_exp_frames = deserialize_buffer(receive_n_frames(n_some_exp_frames, network_metadata), shape = metadata["raw_frame_shape"])
+    some_exp_frames = receive_n_frames(n_some_exp_frames, network_metadata)
 
     return metadata, np.array(some_exp_frames), dark_frames
 
@@ -351,7 +332,8 @@ def process(metadata, raw_frames, background_avg, local_batch_size, received_exp
     filter_all, filter_all_dexp = prepare_filter_functions(metadata, background_avg)
 
     if network_metadata != {}:
-        printv(color("\r Processing a stack of frames of size: {}".format((metadata["exp_num_total"], metadata["raw_frame_shape"][0], metadata["raw_frame_shape"][1])), bcolors.HEADER))
+        printv(color("\r Processing a stack of frames of size: {}".format((metadata["exp_num_total"], 
+                       received_exp_frames[0].shape[0], received_exp_frames[0].shape[1])), bcolors.HEADER))
         results = process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, network_metadata)
     else:
         printv(color("\r Processing a stack of frames of size: {}".format((raw_frames.shape[0], raw_frames[0].shape[0], raw_frames[0].shape[1])), bcolors.HEADER))
@@ -433,7 +415,7 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
             print("Processing input frames buffer...")
 
-            frames_buffer = np.array(deserialize_buffer(frames_buffer, shape = metadata["raw_frame_shape"]))
+            frames_buffer = np.array(frames_buffer)
 
             print(frames_buffer)
 

@@ -12,7 +12,7 @@ help =   "\nUsage: cosmicp.py [options] input.json\n\n\
 \t -c F -> Using a configuration file F. If not given, the default configuration is pulled from {}.\n\
 \t -b N -> Set local batch size = N, per MPI rank. N = 20 by default.\n\
 \t -m M -> Output mode. Supports M = 'disk','socket' and 'disksocket'. 'disk' (default) saves the final results into disk, \n\
-\t\t\t'socket' streams the data into a xpub zmq socket, and 'disksocket' does the same but also stores the final results to disk at the end.\n\
+\t\t\t'socket' streams the data into a xpub zmq socket, and 'disksocket' does the same but also stores the final results into disk at the end.\n\
 \t -o ADDRESS -> Set ADDRESS as 'IP:PORT' corresponding to the address in an XSUB/XPUB router publishes all data from all MPI ranks.\n\
 \t\t\tDefaults to {}\n\
 \t -i ADDRESS -> Set ADDRESS as 'IP:PORT' corresponding to the intermediate address in which each MPI rank publishes their results.\n\
