@@ -264,7 +264,7 @@ def prepare_from_mem(metadata, dark_frames, raw_frames):
 def prepare_from_socket(metadata, network_metadata):
 
     print("Receiving dark frames...")
-    dark_frames = receive_n_frames(metadata["dark_num_total"], network_metadata)
+    dark_frames = receive_n_frames(metadata["dark_num_total"] * (metadata['double_exposure']+1), network_metadata)
 
     n_some_exp_frames = 4  
 
@@ -354,12 +354,15 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
     batch = 1
     number = 0
 
+    total_input_frames = metadata["exp_num_total"] * (metadata['double_exposure']+1)
+    total_output_frames = metadata["exp_num_total"]  
+
     output_socket = "intermediate_socket" in network_metadata
 
-    n_batches = metadata["exp_num_total"] // mpi_size
+    n_batches = total_input_frames // mpi_size
 
     #Here we correct if the total number of frames is not a multiple of mpi_size  
-    extra_frames = metadata["exp_num_total"] - (n_batches * mpi_size)
+    extra_frames = total_input_frames - (n_batches * mpi_size)
 
     extra = 0
     if rank < extra_frames: 
@@ -392,7 +395,7 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
     print("Receiving all exposure frames...")
 
-    while number != metadata["exp_num_total"] - 1: 
+    while number != total_input_frames - 1: 
 
         msg = network_metadata["input_socket"].recv()  # blocking
 
@@ -411,7 +414,7 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
  
         #after filling the buffer we do the processing, or if it is the last frame we consume the buffer too
-        if len(frames_buffer) == input_buffer_size or number == metadata["exp_num_total"] - 1:
+        if len(frames_buffer) == input_buffer_size or number == total_input_frames - 1:
 
             print("Processing input frames buffer...")
 
@@ -428,6 +431,12 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
                 centered_rescaled_frames_jax = filter_all_dexp(frames_buffer[:-1:2], frames_buffer[1::2])
             else:
                 centered_rescaled_frames_jax = filter_all(frames_buffer)
+
+
+            print(n_frames_out)
+            print(output_index)
+            print(centered_rescaled_frames_jax.shape)
+            print(out_data.shape)
 
             # TODO: 'centered_rescaled_frames_jax' picks up an additional dimension somehow, should fix this...
             out_data = jax.ops.index_update(out_data, jax.ops.index[output_index:output_index + n_frames_out, :, :], centered_rescaled_frames_jax[:,0,:,:])
@@ -447,9 +456,9 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
                 sys.stdout.flush()
 
         #Seding frames to socket
-        if output_socket and (frames_received % output_buffer_size == 0 or number == metadata["exp_num_total"] - 1):
+        if output_socket and (frames_received % output_buffer_size == 0 or number == total_input_frames - 1):
 
-            max_index = min(frames_sent + output_buffer_size, (metadata["exp_num_total"])// (metadata['double_exposure']+1))
+            max_index = min(frames_sent + output_buffer_size, total_output_frames)
 
             print("Sending output frames buffer...")
             for i in range(frames_sent, max_index):
@@ -461,7 +470,7 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
                 network_metadata["intermediate_socket"].send(msg)
 
             frames_sent += output_buffer_size
-            print("{} frames sent".format(min(frames_sent, (metadata["exp_num_total"])// (metadata['double_exposure']+1))))
+            print("{} frames sent".format(min(frames_sent, total_output_frames)))
 
         #if rank == 0: print("\n")
 
@@ -571,7 +580,6 @@ def save_results(fname, metadata, local_data, my_indexes, n_frames):
 
         dataAve = frames_gather[()].mean(0)
 
-        print("hi")
 
         pMask = np.fft.fftshift((dataAve > 0.1 * dataAve.max()))
         probe = np.sqrt(np.fft.fftshift(dataAve)) * pMask

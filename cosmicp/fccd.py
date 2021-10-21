@@ -94,7 +94,10 @@ def filter_bblocks(data):
     # vertical stripes
     yy=np.reshape(data[:,:,11],(nrcols,192))
     # clip and smooth
-    bkgthr=5 # background threshold
+
+    filter_strength = 3
+
+    bkgthr=filter_strength # background threshold
 
     # 2d version deviates significantly from original
     # gg2 = np.outer(gg,gg)
@@ -108,7 +111,8 @@ def filter_bblocks(data):
     ###yy_avg=np.reshape(np.average(np.clip(bblocksXtif1(data_out)[1:11,:,:],0,2*bkgthr),axis=0),(1,192,12))
     yy_avg=np.reshape(np.average(np.clip(data_out[1:10,:,:],0,2*bkgthr),axis=0),(1,192,12))
     data_out -= yy_avg
-    data_out *= data_out>7
+
+    data_out *= data_out> filter_strength
     return data_out#-yy_s-yy_avg
 
 ######################3
