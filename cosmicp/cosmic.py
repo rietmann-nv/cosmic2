@@ -118,7 +118,7 @@ if __name__ == '__main__':
 
     metadata, background_avg, received_exp_frames = prepare(metadata, dark_frames, exp_frames, network_metadata)
 
-    if options["output_mode"] != "disk":
+    if options["output_mode"] != "disk" and rank == 0:
         send_metadata(network_metadata, metadata)
 
     out_data, my_indexes = process(metadata, exp_frames, background_avg, options["batch_size_per_rank"], received_exp_frames, network_metadata)

@@ -399,15 +399,15 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
         msg = network_metadata["input_socket"].recv()  # blocking
 
-        (number, frame) = msgpack.unpackb(msg, object_hook= msgpack_numpy.decode, use_list=False,  max_bin_len=50000000, raw=False)
-
-        print("Received frame " + str(number))
+        (number, frame) = msgpack.unpackb(msg, object_hook= msgpack_numpy.decode, use_list=False,  max_bin_len=50000000, raw=False)  
 
         number = int(number)
         final_number = number // (metadata["double_exposure"] + 1)
 
         #Each rank takes only some frames
         if (final_number % mpi_size) == rank: 
+
+            print("Received frame " + str(number))
 
             frames_buffer.append(frame)
             index_buffer.append(final_number)
@@ -463,6 +463,7 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
             print("Sending output frames buffer...")
             for i in range(frames_sent, max_index):
                 print(i)
+                print(my_indexes)
                 print("Sending frame " + str(my_indexes[i]) + " to socket")
 
                 msg = msgpack.packb((b'%d' % my_indexes[i], npo.array(out_data[i])), default=msgpack_numpy.encode, use_bin_type=True)
@@ -474,8 +475,9 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
 
         #if rank == 0: print("\n")
 
-        frames_received = frames_received + 1/ (metadata['double_exposure']+1)
-        print(frames_received)
+        if (final_number % mpi_size) == rank:
+            frames_received = frames_received + 1/ (metadata['double_exposure']+1)
+            print(frames_received)
 
     return out_data, my_indexes
 
