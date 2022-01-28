@@ -3,7 +3,7 @@ import socket
 import struct
 import datetime
 import numpy as np
-from cosmicp import fccd_alt as fccd
+import cosmic.camera.fccd as fccd
 
 today = datetime.date.fromtimestamp(time.time())
 

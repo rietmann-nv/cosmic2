@@ -1,9 +1,7 @@
 import sys
 import os
-import jax.numpy as np
-import jax
-import jax.ops
-import jax.dlpack
+import cupy as np
+import cupyx.scipy.signal
 import scipy
 import scipy.constants
 import scipy.interpolate
@@ -14,7 +12,7 @@ import zmq
 import json
 import threading
 from .nexus_io import write, nexus_metadata, nexus_data, cosmic_metadata
-from .fccd import imgXraw as cleanXraw
+from .fccd_cupy import imgXraw as cleanXraw
 from .common import printd, printv, rank, gather, color, bcolors, comm
 from .common import  size as mpi_size
 from .diskIO import IO, frames_out
@@ -27,13 +25,14 @@ import msgpack_numpy
 
 import IPython
 
-@jax.jit
+import cucim.skimage.transform
+
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
 
     msk=data0<thres    
 
     return (double_exp_time_ratio+1)*(data0*msk+data1)/(double_exp_time_ratio*msk+1)
-@jax.jit
+
 def resolution2frame_width(final_res, detector_distance, energy, detector_pixel_size, frame_width):
 
     hc=scipy.constants.Planck*scipy.constants.c/scipy.constants.elementary_charge
@@ -44,30 +43,41 @@ def resolution2frame_width(final_res, detector_distance, energy, detector_pixel_
     return padded_frame_width # cropped (TODO:or padded?) width of the raw clean frames
 
 #Computes a weighted average of the coordinates, where if the image is stronger you have more weight.
-@jax.jit
+
 def center_of_mass(img, coord_array_1d):
     return np.array([np.sum(img*coord_array_1d)/np.sum(img), np.sum(img*coord_array_1d.T)/np.sum(img)])
 
-@jax.jit
+
 def filter_frame(frame, bbox):
-    return jax.scipy.signal.convolve2d(frame, bbox, mode='same', boundary='fill')
+    return cupyx.scipy.signal.convolve2d(frame, bbox, mode='same', boundary='fill')
 
 
 #Interpolation around the center of mass, thus centering. This downsamples into the output frame width
-@partial(jax.jit, static_argnums=2)
+
 def shift_rescale(img, center_of_mass, out_frame_shape, scale):
+    import jax
+    import jax.dlpack
 
-    img_out = jax.image.scale_and_translate(img, [out_frame_shape, out_frame_shape], [0,1], jax.numpy.array([scale, scale]), jax.numpy.array([center_of_mass[1], center_of_mass[0]]) , method = "bilinear", antialias = False).T    
+    img_jax = jax.dlpack.from_dlpack(img.astype(np.float32).toDlpack())
 
+    img_out_jax = jax.image.scale_and_translate(img_jax, [out_frame_shape, out_frame_shape], [0,1], jax.numpy.array([scale, scale]), jax.numpy.array([center_of_mass[1], center_of_mass[0]]) , method = "bilinear", antialias = False).T
+
+    img_out = np.asarray(img_out_jax)
+
+    # cucim's rescale doesn't support the translate option
+    # assert center_of_mass[0] == 0 and center_of_mass[1] == 0, "cucim rescale doesn't support translate"
+    
+    # img_out = cucim.skimage.transform.rescale(img, scale, anti_aliasing=None, order=1).T[:out_frame_shape, :out_frame_shape]
+    
     img_out*=(img_out>0)
 
-    img_out = np.float32(img_out)
+    img_out = img_out.astype(np.float32)
             
     img_out = np.reshape(img_out, (1, out_frame_shape, out_frame_shape))
 
     return img_out
 
-@jax.jit
+
 def split_background(background_double_exp):
 
     # split the average from 2 exposures:
@@ -78,7 +88,7 @@ def split_background(background_double_exp):
 
 
 
-@jax.jit
+
 def clean_frames(dark_frames, frames, metadata):
     background_avg = split_background(dark_frames)
 
@@ -186,7 +196,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
             # get clean frames
             clean_frame.append(cleanXraw(frames[i] - background_avg))
 
-    clean_frame = npo.array(clean_frame)
+    clean_frame = np.array(clean_frame)
 
     metadata["frame_width"] = clean_frame.shape[0]
 
@@ -212,7 +222,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
     metadata["energy"] = metadata["energy"]*scipy.constants.elementary_charge
 
     #Convolution kernel
-    kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
+    kernel_width = npo.max(npo.array([npo.int32(npo.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
     bbox = np.ones((kernel_width,kernel_width))
 
     filtered_frames = []
@@ -221,11 +231,11 @@ def compute_background_metadata(metadata, frames, dark_frames):
 
         filtered_frames.append(shift_rescale(clean_frame[i], (0,0), metadata["output_frame_width"], metadata["output_frame_width"]/metadata["padded_frame_width"])[0])
 
-    filtered_frames = npo.array(filtered_frames)
+    filtered_frames = np.array(filtered_frames)
 
     com = center_of_mass(filtered_frames*(filtered_frames>0), yy)
 
-    com = npo.array(np.round(com))
+    com = np.array(np.round(com))
 
     metadata["center_of_mass"] = metadata["output_frame_width"]//2 - com
     metadata["output_padded_ratio"] = metadata["output_frame_width"]/metadata["padded_frame_width"]
@@ -571,7 +581,40 @@ def process_socket(metadata, filter_all, filter_all_dexp, received_exp_frames, n
     return out_data, my_indexes
 
 
-def process_batch(metadata, raw_frames, local_batch_size, filter_all, filter_all_dexp):
+
+def process_batch_cupy(metadata, frames_batch, background_avg):
+
+    #Convolution kernel
+    kernel_width = npo.max(npo.array([npo.int32(npo.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
+    kernel_box = np.ones((kernel_width,kernel_width))
+
+    if metadata["double_exposure"]:
+        out_data = np.zeros((frames_batch.shape[0]//2, metadata["output_frame_width"], metadata["output_frame_width"]))
+    else:
+        out_data = np.zeros((frames_batch.shape[0], metadata["output_frame_width"], metadata["output_frame_width"]))
+
+    #printd(out_index)
+    i_batch = 0
+    for i in range(0, frames_batch.shape[0], metadata['double_exposure']+1):
+        
+        if metadata["double_exposure"]:
+            clean_frame = combine_double_exposure(cleanXraw(frames_batch[i]-background_avg[0]), \
+                                                  cleanXraw(frames_batch[i+1]-background_avg[1]), metadata["double_exp_time_ratio"])           
+        else:
+            clean_frame = cleanXraw(frames_batch[i]-background_avg)
+          
+        filtered_frame = filter_frame(clean_frame, kernel_box)
+
+        centered_rescaled_frame = shift_rescale(filtered_frame, metadata["center_of_mass"].get(), metadata["output_frame_width"], metadata["output_padded_ratio"])
+
+        # IPython.embed()
+        out_data[i_batch] = centered_rescaled_frame[0] # [0] because it picks up an extra dimension in shift_rescale
+        i_batch += 1
+
+    return out_data
+
+
+def process_batch_jax(metadata, raw_frames, local_batch_size, background_avg):
 
     n_total_frames = raw_frames.shape[0]
 
