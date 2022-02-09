@@ -31,9 +31,11 @@ import cupy.cuda.nvtx as nvtx
 
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
 
-    msk=data0<thres    
+    
+    msk=data0<thres
 
-    return (double_exp_time_ratio+1)*(data0*msk+data1)/(double_exp_time_ratio*msk+1)
+    val = np.float32(double_exp_time_ratio+1)*(data0*msk+data1)/(np.float32(double_exp_time_ratio)*msk+np.float32(1))
+    return val
 
 def resolution2frame_width(final_res, detector_distance, energy, detector_pixel_size, frame_width):
 
@@ -614,7 +616,7 @@ def process_batch_cupy(metadata, frames_batch, background_avg):
 
         out_data[i_batch] = centered_rescaled_frame[0] # [0] because it picks up an extra dimension in shift_rescale
         i_batch += 1
-        IPython.embed()
+        # IPython.embed()
 
     return out_data
 
