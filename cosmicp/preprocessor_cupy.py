@@ -27,6 +27,8 @@ import IPython
 
 import cucim.skimage.transform
 
+import cupy.cuda.nvtx as nvtx
+
 def combine_double_exposure(data0, data1, double_exp_time_ratio, thres=3e3):
 
     msk=data0<thres    
@@ -55,18 +57,21 @@ def filter_frame(frame, bbox):
 #Interpolation around the center of mass, thus centering. This downsamples into the output frame width
 
 def shift_rescale(img, center_of_mass, out_frame_shape, scale):
+    # ensure that jax doesn't use up all the gpu memory for this one operation
+    import os
+    os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
     import jax
     import jax.dlpack
-
+    
+    # jax's scale_and_translate isn't readily available in cupy, and this doesn't cause a crash in neo
+    nvtx.RangePush("jax.scale_and_translate")
     img_jax = jax.dlpack.from_dlpack(img.astype(np.float32).toDlpack())
-
     img_out_jax = jax.image.scale_and_translate(img_jax, [out_frame_shape, out_frame_shape], [0,1], jax.numpy.array([scale, scale]), jax.numpy.array([center_of_mass[1], center_of_mass[0]]) , method = "bilinear", antialias = False).T
 
     img_out = np.asarray(img_out_jax)
-
+    nvtx.RangePop()
     # cucim's rescale doesn't support the translate option
     # assert center_of_mass[0] == 0 and center_of_mass[1] == 0, "cucim rescale doesn't support translate"
-    
     # img_out = cucim.skimage.transform.rescale(img, scale, anti_aliasing=None, order=1).T[:out_frame_shape, :out_frame_shape]
     
     img_out*=(img_out>0)
@@ -94,7 +99,7 @@ def clean_frames(dark_frames, frames, metadata):
 
     clean_frame_shape = cleanXraw(frames[0,:,:]).shape
 
-    clean_frame = np.zeros((frames.shape[0]//2, clean_frame_shape[0], clean_frame_shape[1]))
+    clean_frame = np.zeros((frames.shape[0]//2, clean_frame_shape[0], clean_frame_shape[1]), dtype=np.float32)
     m_ratio = metadata["double_exp_time_ratio"]
     for i in range(0, frames.shape[0], 2):
             
@@ -153,7 +158,7 @@ def compute_background_metadata_v2(metadata, frames, dark_frames):
 
     #Convolution kernel
     kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
-    bbox = np.ones((kernel_width,kernel_width))
+    bbox = np.ones((kernel_width,kernel_width), np.float32)
 
     filtered_frames = []
     for i in range(0, clean_frame.shape[0]):
@@ -223,7 +228,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
 
     #Convolution kernel
     kernel_width = npo.max(npo.array([npo.int32(npo.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
-    bbox = np.ones((kernel_width,kernel_width))
+    bbox = np.ones((kernel_width,kernel_width), dtype=np.float32)
 
     filtered_frames = []
     for i in range(0, clean_frame.shape[0]):
@@ -235,7 +240,7 @@ def compute_background_metadata(metadata, frames, dark_frames):
 
     com = center_of_mass(filtered_frames*(filtered_frames>0), yy)
 
-    com = np.array(np.round(com))
+    com = npo.array(npo.round(com.get()))
 
     metadata["center_of_mass"] = metadata["output_frame_width"]//2 - com
     metadata["output_padded_ratio"] = metadata["output_frame_width"]/metadata["padded_frame_width"]
@@ -396,7 +401,7 @@ def prepare_filter_functions(metadata, background_avg):
 
     #Convolution kernel
     kernel_width = np.max(np.array([np.int32(np.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
-    kernel_box = np.ones((kernel_width,kernel_width))
+    kernel_box = np.ones((kernel_width,kernel_width), np.float32)
 
     cleanXraw_vmap = jax.vmap(lambda x: cleanXraw(x - background_avg))
     cleanXraw_vmap_d1 = jax.vmap(lambda x: cleanXraw(x - background_avg[0]))
@@ -586,12 +591,12 @@ def process_batch_cupy(metadata, frames_batch, background_avg):
 
     #Convolution kernel
     kernel_width = npo.max(npo.array([npo.int32(npo.floor(metadata["padded_frame_width"]/metadata["output_frame_width"])),1]))
-    kernel_box = np.ones((kernel_width,kernel_width))
+    kernel_box = np.ones((kernel_width,kernel_width), dtype=np.float32)
 
     if metadata["double_exposure"]:
-        out_data = np.zeros((frames_batch.shape[0]//2, metadata["output_frame_width"], metadata["output_frame_width"]))
+        out_data = np.zeros((frames_batch.shape[0]//2, metadata["output_frame_width"], metadata["output_frame_width"]), dtype=np.float32)
     else:
-        out_data = np.zeros((frames_batch.shape[0], metadata["output_frame_width"], metadata["output_frame_width"]))
+        out_data = np.zeros((frames_batch.shape[0], metadata["output_frame_width"], metadata["output_frame_width"]), dtype=np.float32)
 
     #printd(out_index)
     i_batch = 0
@@ -605,11 +610,11 @@ def process_batch_cupy(metadata, frames_batch, background_avg):
           
         filtered_frame = filter_frame(clean_frame, kernel_box)
 
-        centered_rescaled_frame = shift_rescale(filtered_frame, metadata["center_of_mass"].get(), metadata["output_frame_width"], metadata["output_padded_ratio"])
+        centered_rescaled_frame = shift_rescale(filtered_frame, metadata["center_of_mass"], metadata["output_frame_width"], metadata["output_padded_ratio"])
 
-        # IPython.embed()
         out_data[i_batch] = centered_rescaled_frame[0] # [0] because it picks up an extra dimension in shift_rescale
         i_batch += 1
+        IPython.embed()
 
     return out_data
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import cupy as np
+import numpy as np
 
 #import scipy.constants
  
@@ -70,7 +70,7 @@ def conv2d(data, filt):
     # data_s=np.empty(np.shape(data))
     # nr=data.shape[1]
 
-    data_s=np.empty(np.shape(data), dtype=np.float32)
+    data_s=np.empty(np.shape(data))
     for r in range(data.shape[1]):
         # data_s[:,r] = np.convolve(data[:,r], filt, 'same')
         data_s[:,r] = np.convolve(data[:,r], filt, 'same')
